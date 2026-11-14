@@ -19,3 +19,5 @@ scratch/
 # Worker-only reference copies
 todo-widget/_reference_packaged/
 usage-monitor/docs_shots/
+# Orchestrator briefs name the test machine; never commit them
+docs/briefs/

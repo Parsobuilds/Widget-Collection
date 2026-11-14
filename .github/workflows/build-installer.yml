@@ -56,3 +56,30 @@ jobs:
           name: DesktopWidgets-Setup-Signed
           path: signed/**
           if-no-files-found: error
+
+  verify-install:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download unsigned installer
+        uses: actions/download-artifact@v4
+        with:
+          name: DesktopWidgets-Setup
+          path: installer-under-test
+      - name: Install, self-test and uninstall on a clean runner
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem installer-under-test -Filter "DesktopWidgets-Setup-*.exe" | Select-Object -First 1).FullName
+          python installer\ci\verify_install.py --installer $setup --out selftest-cards
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload selftest cards
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-cards
+          path: selftest-cards
+          if-no-files-found: warn
