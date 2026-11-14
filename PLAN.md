@@ -159,7 +159,9 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
 ## Linux chunks
 
 ### Wave 1 (parallel, disjoint files)
-- [ ] test-vms (Codex gpt-6.1-sol failed: ChatGPT usage limit -> re-dispatched to Claude Sonnet 5.5, high) - `~/dw_test/vm/` on the test machine only
+- [ ] test-vms (Codex gpt-6.1-sol failed: ChatGPT usage limit -> Claude Sonnet 5.5, high -> that orchestrator hit the Claude API rate limit at 15:32) - `~/dw_test/vm/` on the test machine only
+  - [x] Both guests installed and snapshotted (`clean-windows`, `clean-ubuntu`); start scripts and `autounattend.xml` written.
+  - [ ] Resumed as `test-vms-resume` (Claude Sonnet 5.5 high, brief `docs/briefs/test-vms-resume.md`): install the CURRENT Windows installer inside the guest, screenshot each widget, install the Linux tarball in the Ubuntu guest, write `README-vm.txt`, revert both snapshots, leave both VMs powered off.
 - [x] todo-linux (Claude Sonnet 5.5, medium) - `todo-widget/app/`
 - [x] usage-linux (Claude Sonnet 5.5, high) - `usage-monitor/`
 - [x] desktop-linux (Claude Sonnet 5.5, medium) - `desktop-monitor/`
@@ -169,7 +171,8 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
 ### Wave 3
 - [x] docs-linux (Claude Haiku 5.5, medium) - README Linux section, CONVENTIONS, notices; orchestrator merged
 ### Wave 4
-- [ ] final-review (Claude Opus 5.5, high, read-only) - Linux secret storage/logging; install.sh/uninstall.sh
+- [ ] final-review (Claude Opus 5.5, high, read-only; first dispatch died with the Claude API rate limit) - Linux secret storage/logging; install.sh/uninstall.sh
+  - [ ] Resumed as `final-review` (Claude Opus 5.5 high via the claudeAgent_minimax provider, brief `docs/briefs/final-review.md`); output `temp/evidence/final-review/findings.md`.
 
 ## Linux status log
 - 2026-11-14 14:30: scouting done; test-machine venv, shot.py, libsecret-tools/gnome-screenshot/grim installed; briefs written.
@@ -198,3 +201,19 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
   Windows CI 43606551888 green with readable cards (F1 closed). Committed 3dcc563, pushed.
 - 2026-11-14 15:20 (test machine clock): checks 2, 3, 4, 5, 6, 7 PASS (evidence temp/evidence/checks/). Check 6 found
   decision L8 (xcb libraries); temporary build-linux trigger removed (L7). Rebuilding the tarball with the libraries.
+- 2026-11-14 15:40: check 1 PASS (Windows build exit 0; 100/217/93 tests; installer 51,518,258 B). Checks 8, 9, 11, 12
+  PASS; dwtest throwaway user install + selftests PASS, user deleted. Tarball rebuilt with xcb libs (96,231,393 B).
+  Wave 4 final-review dispatched (Claude Opus 5.5 high, read-only). test-vms still running.
+- 2026-11-14 15:32: the orchestrator (Claude Opus 5.5) and two of its children died with "Claude API rate limit
+  reached". Everything already committed and pushed was safe (`linux-port` = 7739b16, all pushed). The rate limit hit
+  during the two chunks that were still open: test-vms and final-review.
+- 2026-11-14 15:45: parent took over the merge. Verified state: both CI workflows green (build-installer 43606551888,
+  build-linux 43607523770), sweeps clean (files 0 hits / 99 files, gitlog 0 hits / 10 commits), README Linux section and
+  THIRD_PARTY_NOTICES entries present, both guests installed with snapshots, Windows guest sitting at a clean desktop.
+  Re-dispatched the two open chunks to the claudeAgent_minimax provider (not throttled): `test-vms-resume` (Sonnet 5.5
+  high) and `final-review` (Opus 5.5 high). Test machine cleaned: fake provider server on :8765 killed, the stray
+  ~/.local/bin/python3.12 symlink removed, the portal screenshot permission deleted (Lookup returns an empty table).
+- 2026-11-14 15:47: the last green build-linux run predated the xcb bundling change in build.py, so the temporary push
+  trigger was re-added and pushed (cddd24d) to run the workflow on the final commit; build-installer dispatched directly
+  with `gh workflow run build-installer.yml --ref linux-port` (run 43611784236). Both runs in flight; the trigger is
+  removed again once build-linux is green.
