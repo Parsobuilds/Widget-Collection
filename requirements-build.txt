@@ -1,0 +1,11 @@
+# Packages bundled into the three frozen widgets, plus the build tools.
+# Pinned so a new release cannot silently change PyInstaller hooks or Qt behaviour.
+PySide6==6.12.0
+Pillow==13.0.0
+psutil==7.2.2
+nvidia-ml-py==13.615.71
+WMI==1.5.1
+pywin32==312
+pythonnet==3.2.1
+keyring==25.7.0
+pyinstaller==6.22.3

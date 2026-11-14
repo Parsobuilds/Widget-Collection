@@ -1,0 +1,21 @@
+# Build output and environments
+.build-venv/
+.venv/
+venv/
+build/
+dist/
+__pycache__/
+*.py[cod]
+# Downloaded at build time (pinned + hash-checked by build.py)
+desktop-monitor/lib/
+third_party_cache/
+# Runtime output that must never be committed
+*.log
+selftest_card*.png
+temp/
+scratch/
+.env
+.env.*
+# Worker-only reference copies
+todo-widget/_reference_packaged/
+usage-monitor/docs_shots/

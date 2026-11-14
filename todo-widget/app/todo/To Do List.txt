@@ -1,0 +1,10 @@
+TO DO LIST
+==========
+
+[ ] 1. Tick this one off by clicking it   (added 2026-11-12)
+
+
+[ ] 2. Drag this row above the first task   (added 2026-11-12)
+
+
+[ ] 3. Press Ctrl+F12 to snap the card to a screen corner   (added 2026-11-12)
