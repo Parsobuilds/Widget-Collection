@@ -1613,6 +1613,12 @@ def main() -> None:
     global _single_instance_mutex
     args = parse_args(sys.argv[1:])
 
+    if args.selftest and sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        # The offscreen platform loads no system fonts on Windows, so every glyph
+        # would render as a box in the test PNG (same fix as the other two widgets).
+        os.environ.setdefault("QT_QPA_FONTDIR",
+                              os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
+
     # Only one widget may run: a second launch just focuses the first window.
     # (The self-test builds its own hidden widget, so it skips this check.)
     if not args.selftest and paths.is_linux():
