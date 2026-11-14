@@ -195,6 +195,11 @@ def clean() -> None:
 # ---------------------------------------------------------------- Linux path
 # Everything in this block runs only with --linux on Linux; the Windows path is untouched.
 LINUX_BINARIES = ("TodoWidget", "UsageMonitor", "DesktopMonitor")
+# Qt's X11 (xcb) plugin needs these. PyInstaller bundles them only when the build machine
+# has them, and without them the widgets cannot start on an X11 session.
+LINUX_XCB_LIBRARIES = ("libxcb-cursor.so.0", "libxcb-icccm.so.4", "libxcb-image.so.0",
+                       "libxcb-keysyms.so.1", "libxcb-render-util.so.0")
+LINUX_XCB_PACKAGES = "libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0"
 
 
 def linux_python() -> Path:
@@ -278,6 +283,11 @@ def verify_linux_apps() -> None:
     for name in LINUX_BINARIES:
         if not (bundle / name).is_file():
             raise RuntimeError(f"Missing build output: {(bundle / name).relative_to(PROJECT)}")
+    missing = [library for library in LINUX_XCB_LIBRARIES if not any(bundle.rglob(library))]
+    if missing:
+        raise RuntimeError("The bundle lacks the X11 (xcb) libraries " + ", ".join(missing)
+                           + ". Install them on the build machine and build again, for example: "
+                           f"sudo apt install {LINUX_XCB_PACKAGES}")
     BUILD.mkdir(exist_ok=True)
     for name in LINUX_BINARIES:
         with tempfile.TemporaryDirectory(prefix="selftest-", dir=BUILD) as directory:

@@ -150,6 +150,11 @@ L4. **Keyring over ssh**: the logged-in session's gnome-keyring is unlocked; ssh
 L5. **Live model list differs from the shared model list kept outside this repository** (new `claudeAgent_minimax` provider; Antigravity now lists only
     Gemini models). Not edited, because that folder is read-only for this job; recorded here instead.
 L6. **windows-ci never installs on the owner's PC**; the real install/uninstall proof runs only on the CI runner.
+L7. **build-linux needed a temporary push trigger** (`linux-port`, workflow file only): `workflow_dispatch` returns 404
+    until the workflow is on the default branch, and merging is out of scope. Two runs, then the trigger was removed.
+L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor0/icccm4/image0/keysyms1/render-util0.
+    CI installs them so PyInstaller bundles them; the test-machine build lacked them, so its tarball could not start on
+    an X11 session. Installed them on the build machine, rebuilt, and `build.py --linux` now fails if they are missing.
 
 ## Linux chunks
 
@@ -162,7 +167,7 @@ L6. **windows-ci never installs on the owner's PC**; the real install/uninstall 
 ### Wave 2
 - [x] packaging-linux (Codex out of allowance; Antigravity out of quota; planned: Claude Sonnet 5.5 medium) - `build.py`, `installer/linux/`, `requirements-build-linux.txt`, `.github/workflows/build-linux.yml`
 ### Wave 3
-- [ ] docs (Antigravity gemini-3.8-flash, low) - README Linux section draft; orchestrator merges, sweeps, builds, CI
+- [x] docs-linux (Claude Haiku 5.5, medium) - README Linux section, CONVENTIONS, notices; orchestrator merged
 ### Wave 4
 - [ ] final-review (Claude Opus 5.5, high, read-only) - Linux secret storage/logging; install.sh/uninstall.sh
 
@@ -188,3 +193,8 @@ L6. **windows-ci never installs on the owner's PC**; the real install/uninstall 
   387 tests (todo 100, usage 217, desktop 70); tarball 96,200,706 B; install/uninstall flag paths verified in temp HOMEs
   (evidence temp/evidence/packaging-linux/). Windows `build.py --help` unchanged plus `--linux`. Committed. Wave 3 docs
   chunk dispatched (Claude Haiku 5.5).
+- 2026-11-14 16:05: docs-linux landed (Claude Haiku 5.5). CI build-linux run 1 failed (no Pillow outside the venv);
+  fixed in build.py (icon conversion runs in the venv Python); run 43607523770 green, artifact DesktopWidgets-linux.
+  Windows CI 43606551888 green with readable cards (F1 closed). Committed 3dcc563, pushed.
+- 2026-11-14 15:20 (test machine clock): checks 2, 3, 4, 5, 6, 7 PASS (evidence temp/evidence/checks/). Check 6 found
+  decision L8 (xcb libraries); temporary build-linux trigger removed (L7). Rebuilding the tarball with the libraries.

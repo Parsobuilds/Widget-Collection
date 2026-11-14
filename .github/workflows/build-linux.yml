@@ -4,10 +4,6 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*"]
-    # TEMPORARY (removed in the next commit): one run on linux-port, because
-    # workflow_dispatch only works once this file is on the default branch (run 2).
-    branches: ["linux-port"]
-    paths: [".github/workflows/build-linux.yml"]
 
 permissions:
   contents: read

@@ -168,6 +168,12 @@ python3.12 build.py --linux
 
 It creates `.build-venv-linux`, runs the unit tests with the offscreen Qt platform, freezes the three widgets with PyInstaller, and writes `dist/DesktopWidgets-1.0.0-linux-x86_64.tar.gz`.
 
+The build machine needs the X11 libraries that Qt's X11 support loads, so that they are copied into the package. The build stops with a message if they are missing. On Ubuntu:
+
+```text
+sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0
+```
+
 ## Licence
 
 Desktop Widgets is available under the [MIT Licence](LICENSE). See [Third-party notices](THIRD_PARTY_NOTICES.md) for included components and their licences.
