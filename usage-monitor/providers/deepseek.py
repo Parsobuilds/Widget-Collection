@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from models import UsageRow
-from providers.base import FieldSpec, ProviderError, ProviderKind, http_json, make_row, money_text, to_number
+from providers.base import SECRET_STORE_HELP, FieldSpec, ProviderError, ProviderKind, http_json, make_row, money_text, to_number
 
 if TYPE_CHECKING:
     from provider_config import ProviderInstance
@@ -65,7 +65,7 @@ class DeepSeekKind(ProviderKind):
     description = "Needs a DeepSeek API key (platform.deepseek.com, API keys) to show your account balance."
     stability = "official"
     docs_url = "https://api-docs.deepseek.com/api/get-user-balance"
-    fields = [FieldSpec(key="api_key", label="API key", kind="secret", help="Saved in Windows Credential Manager.")]
+    fields = [FieldSpec(key="api_key", label="API key", kind="secret", help=SECRET_STORE_HELP)]
     min_poll_seconds = 300
 
     def fetch(self, instance: "ProviderInstance", secret: str | None) -> list[UsageRow]:

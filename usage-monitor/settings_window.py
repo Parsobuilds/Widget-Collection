@@ -6,8 +6,10 @@ The window has two pages inside a stacked widget:
 * the form page adds a new provider or edits an existing one.
 
 All network work (the Test button) runs on a worker thread, so the window never
-freezes. Secret values (API keys) go straight to Windows Credential Manager through
-``secrets_store`` and are never written to the config file, a label or a log.
+freezes. Secret values (API keys) go straight to the system key store (Windows
+Credential Manager, or the Secret Service on Linux) through ``secrets_store`` and
+are never written to the config file, a label or a log. When no key store is
+available the form says so in plain English and refuses to save a key.
 
 The three helper modules are looked up through module-level names (``registry``,
 ``provider_config`` and ``secrets_store``) so tests can swap in fakes.
@@ -96,7 +98,23 @@ CATEGORY_HEADINGS: list[tuple[str, str]] = [
     ("custom", "Custom"),
 ]
 
-SECRET_PLACEHOLDER = "Saved in Windows Credential Manager (leave blank to keep)"
+def _store_name() -> str:
+    """Where keys are kept on this computer, for sentences shown to the user."""
+    return str(getattr(secrets_store, "STORE_NAME", "") or "the system key store")
+
+
+def _key_store_problem() -> str:
+    """Plain-English reason keys cannot be saved here, or "" when they can."""
+    check = getattr(secrets_store, "key_store_problem", None)
+    if check is None:
+        return ""
+    try:
+        return str(check() or "")
+    except Exception:  # noqa: BLE001 - a broken check must not break the form
+        return ""
+
+
+SECRET_PLACEHOLDER = f"Saved in {_store_name()} (leave blank to keep)"
 EMPTY_TEXT = "No providers yet. Press Add a provider to start."
 NOT_TESTED = "Not tested yet"
 TEST_ID = "test0000"  # temporary id used for an unsaved Test
@@ -335,15 +353,24 @@ class SettingsWindow(QtWidgets.QDialog):
         label = inst.label if inst else "this provider"
         answer = QtWidgets.QMessageBox.question(
             self, "Remove provider",
-            f"Remove {label}? Its saved key is deleted from Windows Credential Manager.",
+            f"Remove {label}? Its saved key is deleted from {_store_name()}.",
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
             QtWidgets.QMessageBox.StandardButton.No)
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
             return
-        provider_config.remove_instance(self._config, instance_id)
+        key_problem = ""
+        try:
+            provider_config.remove_instance(self._config, instance_id)
+        except _secret_error_type() as exc:
+            # The provider is gone from the config, but its key could not be deleted.
+            key_problem = str(exc)
         self._status.pop(instance_id, None)
         self._status_ok.pop(instance_id, None)
         self._save()
+        if key_problem:
+            QtWidgets.QMessageBox.warning(
+                self, "Remove provider",
+                "The provider was removed, but its saved key could not be deleted. " + key_problem)
         self._refresh_list()
         self.providers_changed.emit()
 
@@ -489,6 +516,15 @@ class SettingsWindow(QtWidgets.QDialog):
         lay = self._form_layout
 
         lay.addWidget(_label(kind.description))
+        if any(spec.kind == "secret" for spec in kind.fields):
+            problem = _key_store_problem()
+            if problem:
+                # No key store: say so, and refuse to save (a key is never put in a file).
+                warning = _label(problem, "bad")
+                warning.setObjectName("keyStoreProblem")
+                lay.addWidget(warning)
+                if any(spec.kind == "secret" and spec.required for spec in kind.fields):
+                    self._save_btn.setEnabled(False)  # a key is needed and cannot be kept
         if kind.stability == "unofficial":
             lay.addWidget(_label("Unofficial: " + (kind.stability_note or ""), "warn"))
         elif kind.stability == "manual":
@@ -702,7 +738,7 @@ class SettingsWindow(QtWidgets.QDialog):
                 if value.strip():  # blank on edit means "keep the existing key"
                     secrets_store.set_secret(instance_id, value.strip())
         except _secret_error_type() as exc:
-            self._say(str(exc) or "Windows could not save the key.", "bad")
+            self._say(str(exc) or "The key could not be saved.", "bad")
             return
         try:
             if editing:

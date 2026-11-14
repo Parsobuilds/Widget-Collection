@@ -149,10 +149,18 @@ class TempProfile:
         self.root = Path(self._tmp.name)
         self.home = self.root / "profile"
         self.appdata = self.home / "AppData" / "Roaming"
+        self.xdg_config = self.home / ".config"
+        # The folder that holds "DesktopWidgets" on this operating system.
+        self.config_root = self.appdata if sys.platform == "win32" else self.xdg_config
         self.home.mkdir(parents=True)
         self._env = mock.patch.dict(
             os.environ,
-            {"USERPROFILE": str(self.home), "APPDATA": str(self.appdata), "HOME": str(self.home)},
+            {
+                "USERPROFILE": str(self.home),
+                "APPDATA": str(self.appdata),
+                "HOME": str(self.home),
+                "XDG_CONFIG_HOME": str(self.xdg_config),
+            },
         )
 
     def write_json(self, relative: str, data: Any) -> Path:

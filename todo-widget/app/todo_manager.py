@@ -259,7 +259,13 @@ class TodoListManager:
         return added_count
 
     def open_in_notepad(self) -> None:
-        """Brings Notepad to the front or opens the file if not already running."""
+        """Opens the list in the default text editor (Notepad on Windows, xdg-open on Linux)."""
+        if sys.platform.startswith("linux"):
+            try:
+                subprocess.Popen(["xdg-open", self.file_path])
+            except OSError:
+                pass  # no xdg-open installed: nothing sensible to do
+            return
         try:
             os.startfile(self.file_path)
         except Exception:
@@ -395,7 +401,7 @@ def main() -> int:
             widget_script = os.path.join(app_dir, "todo_widget.pyw")
             if not os.path.exists(widget_script):
                 widget_script = os.path.join(app_dir, "todo_widget.py")
-            pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+            pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")  # unchanged on Linux
             subprocess.Popen([pythonw_exe, widget_script], cwd=app_dir)
         print("Desktop To-Do Widget launched.")
 

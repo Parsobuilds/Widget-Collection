@@ -6,7 +6,7 @@
   message is shown to the user as-is, so it is plain English and has no secret.
 * ``ProviderKind``: base class for one catalogue entry.
 * Helpers: a safe HTTP call that turns every failure into a ``ProviderError``,
-  JSON path lookup, number parsing, ``%USERPROFILE%`` path display, row
+  JSON path lookup, number parsing, home-folder path display, row
   construction.
 """
 
@@ -16,6 +16,7 @@ import json
 import os
 import re
 import socket
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -146,14 +147,37 @@ class ProviderKind:
 _ENV_PATTERN = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
 
 
+IS_WINDOWS = sys.platform == "win32"
+
+# Help text for every API-key field: says where the key is kept on this computer.
+SECRET_STORE_HELP = (
+    "Saved in Windows Credential Manager." if IS_WINDOWS else "Saved in your system key store."
+)
+
+
 def home_dir() -> Path:
-    """The user's profile folder (``%USERPROFILE%`` on Windows)."""
-    profile = os.environ.get("USERPROFILE")
-    return Path(profile) if profile else Path.home()
+    """The user's home folder (``%USERPROFILE%`` on Windows, ``Path.home()`` on Linux)."""
+    if IS_WINDOWS:
+        profile = os.environ.get("USERPROFILE")
+        if profile:
+            return Path(profile)
+    return Path.home()
+
+
+def profile_text(*parts: str) -> str:
+    """Show a path under the home folder the way this platform writes it.
+
+    On Windows ``profile_text(".claude", "x.json")`` gives a ``%USERPROFILE%`` path
+    with backslashes; on Linux it gives ``~/.claude/x.json``. Only used for display and as
+    a default the user can edit; the real path is always built with ``home_dir()``.
+    """
+    if IS_WINDOWS:
+        return "%USERPROFILE%\\" + "\\".join(parts)
+    return "~/" + "/".join(parts)
 
 
 def expand_path(text: str) -> Path:
-    """Expand ``%USERPROFILE%``-style variables and ``~`` in a settings path."""
+    """Expand ``%USERPROFILE%``-style variables, ``$VAR`` (Linux) and ``~`` in a settings path."""
 
     def _replace(match: re.Match[str]) -> str:
         name = match.group(1)
@@ -162,18 +186,20 @@ def expand_path(text: str) -> Path:
         return os.environ.get(name, match.group(0))
 
     expanded = _ENV_PATTERN.sub(_replace, text.strip())
+    if not IS_WINDOWS:
+        expanded = os.path.expandvars(expanded)
     if expanded.startswith("~"):
         expanded = str(home_dir()) + expanded[1:]
     return Path(expanded)
 
 
 def display_path(path: Path) -> str:
-    """Show ``path`` with the profile folder written as ``%USERPROFILE%``."""
+    """Show ``path`` with the home folder written as ``%USERPROFILE%`` (Windows) or ``~`` (Linux)."""
     try:
         relative = Path(path).resolve().relative_to(home_dir().resolve())
     except (ValueError, OSError):
         return str(path)
-    return "%USERPROFILE%\\" + str(relative).replace("/", "\\")
+    return profile_text(*relative.parts)
 
 
 def read_json_file(path: Path, what: str) -> dict[str, Any]:

@@ -12,24 +12,33 @@ size, so nothing depends on a particular monitor layout.
 
 This works through the Win32 API, which is all a separate script can use to move another
 program's window.
+
+On Linux there is no equivalent that works everywhere: Wayland does not let one program move
+another's windows (or even its own). ``snap_widget_to_edge`` then quietly returns False, and
+nothing is logged or printed, so the rest of the widget carries on normally.
 """
 
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
 import json
 import os
+import sys
 
 import paths
 
-# Match the widget's per-monitor DPI awareness so SetWindowPos takes physical pixels.
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except Exception:
-    pass
+IS_WINDOWS = sys.platform == "win32"
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
+if IS_WINDOWS:
+    from ctypes import wintypes
+
+    # Match the widget's per-monitor DPI awareness so SetWindowPos takes physical pixels.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
@@ -42,13 +51,15 @@ COMPANION_TITLES = ("Desktop Monitor", "Usage Monitor")
 GAP = 8  # pixels between neighbouring cards
 
 
-class MONITORINFO(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("rcMonitor", wintypes.RECT),
-        ("rcWork", wintypes.RECT),
-        ("dwFlags", wintypes.DWORD),
-    ]
+if IS_WINDOWS:
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+        ]
 
 
 def _find_windows(titles: tuple[str, ...]) -> dict[str, int]:
@@ -71,7 +82,7 @@ def _find_windows(titles: tuple[str, ...]) -> dict[str, int]:
     return found
 
 
-def _work_area(hwnd: int) -> wintypes.RECT:
+def _work_area(hwnd: int):
     """Returns the usable area (taskbar excluded) of the monitor holding hwnd."""
     monitor = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
     info = MONITORINFO()
@@ -80,7 +91,7 @@ def _work_area(hwnd: int) -> wintypes.RECT:
     return info.rcWork
 
 
-def _window_size(hwnd: int) -> tuple[int, int]:
+def _window_size(hwnd: int) -> tuple[int, int]:  # Windows only
     """Returns (width, height) of a window in pixels."""
     rect = wintypes.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -130,6 +141,8 @@ def snap_widget_to_edge(save_position: bool = True) -> bool:
     Pass ``save_position=False`` when the widget itself calls this: it saves its own
     position in its own coordinates a moment later.
     """
+    if not IS_WINDOWS:
+        return False  # see the module note: nothing can move windows on Wayland
     windows = _find_windows((TODO_TITLE,) + COMPANION_TITLES)
     todo = windows.get(TODO_TITLE)
     if todo is None:
@@ -150,6 +163,8 @@ def snap_widget_to_edge(save_position: bool = True) -> bool:
 def main() -> None:
     if snap_widget_to_edge():
         print("Widgets snapped to the screen edge.")
+    elif not IS_WINDOWS:
+        print("Snapping is not available on this system.")
     else:
         print("To-Do Widget is not running.")
 

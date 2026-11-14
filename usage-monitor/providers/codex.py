@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from models import UsageRow, format_reset_countdown
 from providers.base import (
     DetectResult,
+    IS_WINDOWS,
     FieldSpec,
     ProviderError,
     ProviderKind,
@@ -30,6 +31,7 @@ from providers.base import (
     home_dir,
     http_json,
     make_row,
+    profile_text,
     read_json_file,
     to_number,
 )
@@ -44,7 +46,8 @@ def default_auth_path() -> tuple[Path, str]:
     """Return (real path, display text) of Codex's sign-in file."""
     codex_home = os.environ.get("CODEX_HOME", "").strip()
     if codex_home:
-        return Path(codex_home) / "auth.json", "%CODEX_HOME%\\auth.json"
+        shown = "%CODEX_HOME%\\auth.json" if IS_WINDOWS else "$CODEX_HOME/auth.json"
+        return Path(codex_home) / "auth.json", shown
     path = home_dir() / ".codex" / "auth.json"
     return path, display_path(path)
 
@@ -168,7 +171,7 @@ class CodexKind(ProviderKind):
             kind="path",
             required=False,
             default="",
-            placeholder="%USERPROFILE%\\.codex\\auth.json",
+            placeholder=profile_text(".codex", "auth.json"),
             help="Leave empty to use the standard Codex location.",
         )
     ]

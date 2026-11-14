@@ -8,12 +8,15 @@ Every test runs inside the temporary sandbox from sandbox_env.py.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
@@ -28,6 +31,7 @@ from PySide6.QtGui import QImage, QMouseEvent
 
 import glass_theme
 import paths
+import setup_startup
 import snap_widgets
 import todo_widget
 from todo_manager import TodoListManager, TodoItem
@@ -156,7 +160,8 @@ class PathTests(unittest.TestCase):
     """Verifies the per-user data folders sit under %APPDATA%\\DesktopWidgets\\TodoWidget."""
 
     def test_data_paths_are_under_the_app_folder(self) -> None:
-        appdata = os.environ["APPDATA"]
+        # Windows keeps its data under %APPDATA%; Linux under $XDG_CONFIG_HOME.
+        appdata = os.environ["XDG_CONFIG_HOME" if sys.platform.startswith("linux") else "APPDATA"]
         expected = os.path.join(appdata, "DesktopWidgets", "TodoWidget")
         self.assertEqual(paths.data_dir(), expected)
         self.assertTrue(os.path.isdir(expected))
@@ -217,6 +222,124 @@ class FirstRunTests(unittest.TestCase):
         self.assertTrue(os.path.getsize(os.path.join(paths.data_dir(), "selftest_card_goals.png")) > 0)
 
 
+class LinuxBehaviourTests(unittest.TestCase):
+    """Linux paths, autostart file and single-instance lock.
+
+    These run on every platform: ``sys.platform`` and the environment are patched, and every
+    file goes to a temporary folder.
+    """
+
+    def setUp(self) -> None:
+        self.tmp_dir = tempfile.mkdtemp(prefix="todo_widget_linux_")
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.config_home = os.path.join(self.tmp_dir, "config")
+        self.runtime_dir = os.path.join(self.tmp_dir, "runtime")
+        os.makedirs(self.runtime_dir)
+        patches = [
+            mock.patch.object(sys, "platform", "linux"),
+            mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": self.config_home, "XDG_RUNTIME_DIR": self.runtime_dir}),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    # --- paths ---------------------------------------------------------------------------
+    def test_data_and_background_paths_follow_xdg_config_home(self) -> None:
+        self.assertEqual(paths.data_dir(), os.path.join(self.config_home, "DesktopWidgets", "TodoWidget"))
+        self.assertTrue(os.path.isdir(paths.data_dir()))
+        self.assertEqual(
+            paths.widget_background_file(), os.path.join(self.config_home, "DesktopWidgets", "widget_background.json")
+        )
+
+    def test_config_home_defaults_to_dot_config_in_home(self) -> None:
+        home = os.path.join(self.tmp_dir, "home")
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
+            os.environ.pop("XDG_CONFIG_HOME")
+            self.assertEqual(paths.appdata_dir(), os.path.join(home, ".config"))
+
+    def test_lock_file_uses_runtime_dir_and_falls_back_to_data_dir(self) -> None:
+        self.assertEqual(paths.lock_file(), os.path.join(self.runtime_dir, "desktopwidgets-todo.lock"))
+        os.environ.pop("XDG_RUNTIME_DIR")
+        self.assertEqual(paths.lock_file(), os.path.join(paths.data_dir(), "desktopwidgets-todo.lock"))
+
+    # --- autostart -----------------------------------------------------------------------
+    def test_autostart_file_is_written_and_removed(self) -> None:
+        target = os.path.join(self.config_home, "autostart", "desktopwidgets-todo.desktop")
+        self.assertEqual(paths.autostart_file(), target)
+        self.assertFalse(todo_widget.is_startup_enabled())
+        self.assertTrue(todo_widget.set_startup_enabled(True))
+        self.assertTrue(os.path.isfile(target))
+        self.assertTrue(todo_widget.is_startup_enabled())
+        with open(target, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertTrue(text.startswith("[Desktop Entry]\n"))
+        self.assertIn("Type=Application\n", text)
+        self.assertIn("Exec=" + setup_startup._quote_exec_arg(sys.executable), text)
+        self.assertTrue(todo_widget.set_startup_enabled(False))
+        self.assertFalse(os.path.exists(target))
+        self.assertTrue(todo_widget.set_startup_enabled(False))  # removing twice is fine
+
+    def test_setup_startup_script_adds_and_removes_the_file(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()):  # the script prints a status line
+            self.assertEqual(setup_startup.main([]), 0)
+            self.assertTrue(os.path.isfile(paths.autostart_file()))
+            self.assertEqual(setup_startup.main(["--remove"]), 0)
+        self.assertFalse(os.path.exists(paths.autostart_file()))
+
+    def test_exec_arguments_are_quoted(self) -> None:
+        self.assertEqual(setup_startup._quote_exec_arg("/opt/my app/run"), '"/opt/my app/run"')
+        self.assertEqual(setup_startup._quote_exec_arg('a"b$c%d'), '"a\\"b\\$c%%d"')
+
+    def test_frozen_exec_line_is_just_the_binary(self) -> None:
+        with mock.patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(setup_startup.linux_exec_line(), setup_startup._quote_exec_arg(sys.executable))
+
+    # --- single instance -----------------------------------------------------------------
+    def test_second_copy_cannot_take_the_lock(self) -> None:
+        """With a stand-in for ``fcntl`` (which Windows lacks) the first caller wins, the second loses."""
+        held: list[bool] = []
+
+        def fake_flock(_fileno: int, _operation: int) -> None:
+            if held:
+                raise BlockingIOError("locked")
+            held.append(True)
+
+        fake_fcntl = mock.Mock(flock=fake_flock, LOCK_EX=2, LOCK_NB=4)
+        with mock.patch.dict(sys.modules, {"fcntl": fake_fcntl}):
+            self.addCleanup(setattr, todo_widget, "_single_instance_lock", None)
+            self.assertTrue(todo_widget.acquire_linux_lock())
+            first = todo_widget._single_instance_lock
+            self.assertFalse(todo_widget.acquire_linux_lock())
+            first.close()
+        self.assertTrue(os.path.isfile(paths.lock_file()))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "needs the real fcntl.flock")
+    def test_real_flock_blocks_a_second_holder(self) -> None:
+        self.addCleanup(setattr, todo_widget, "_single_instance_lock", None)
+        self.assertTrue(todo_widget.acquire_linux_lock())
+        first = todo_widget._single_instance_lock
+        self.assertFalse(todo_widget.acquire_linux_lock())
+        first.close()  # closing the file frees the lock
+        self.assertTrue(todo_widget.acquire_linux_lock())
+        todo_widget._single_instance_lock.close()
+
+    # --- the card without a tray ---------------------------------------------------------
+    def test_menu_is_reachable_without_a_tray(self) -> None:
+        todo_path = os.path.join(self.tmp_dir, "todo", "To Do List.txt")
+        with mock.patch.object(QtWidgets.QSystemTrayIcon, "isSystemTrayAvailable", return_value=False):
+            widget = todo_widget.DesktopTodoWidget(
+                todo_path, os.path.join(self.tmp_dir, "Goals.json"), os.path.join(self.tmp_dir, "widget_config.json")
+            )
+        self.addCleanup(widget.deleteLater)
+        self.assertIsNone(widget.tray)
+        self.assertIsNotNone(widget.tray_menu)
+        self.assertEqual(widget.act_startup.text(), "Start when I sign in")
+        self.assertEqual(widget.lbl_stats.text().split()[0], "0")  # empty first run
+
+    def test_snapping_is_a_quiet_no_op(self) -> None:
+        self.assertFalse(snap_widgets.snap_widget_to_edge())
+
+
 class SharedBackgroundTests(unittest.TestCase):
     """The shared background file is read and written; the legacy file is only ever read."""
 
@@ -262,8 +385,11 @@ class SharedBackgroundTests(unittest.TestCase):
     def test_default_locations_live_in_the_sandbox(self) -> None:
         sandbox = os.environ["TODOWIDGET_TEST_SANDBOX"]
         self.assertTrue(glass_theme.WIDGET_BG_CONFIG_PATH.startswith(sandbox))
-        self.assertTrue(glass_theme.LEGACY_BG_CONFIG_PATH.startswith(sandbox))
-        self.assertNotEqual(glass_theme.WIDGET_BG_CONFIG_PATH, glass_theme.LEGACY_BG_CONFIG_PATH)
+        if sys.platform.startswith("linux"):
+            self.assertIsNone(glass_theme.LEGACY_BG_CONFIG_PATH)  # no legacy fallback on Linux
+        else:
+            self.assertTrue(glass_theme.LEGACY_BG_CONFIG_PATH.startswith(sandbox))
+            self.assertNotEqual(glass_theme.WIDGET_BG_CONFIG_PATH, glass_theme.LEGACY_BG_CONFIG_PATH)
 
 
 class SnapLayoutTests(unittest.TestCase):

@@ -38,12 +38,14 @@ Key Features & Educational Highlights:
 from __future__ import annotations
 
 import argparse
-import ctypes
-from ctypes import wintypes
 import json
 import os
 import shutil
 import sys
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
 
 # Guard against None std streams under pythonw or DETACHED_PROCESS on Windows
 if sys.stdout is None:
@@ -79,6 +81,7 @@ from PySide6.QtGui import (
 
 import glass_theme
 import paths
+import setup_startup
 from todo_manager import TodoListManager, TodoItem, DEFAULT_TODO_PATH
 from goals_manager import GoalsManager, DEFAULT_GOALS_PATH, backup_path_for
 from goals_tab import GoalsPanel
@@ -148,7 +151,9 @@ def startup_command() -> str:
 
 
 def is_startup_enabled() -> bool:
-    """True when the widget's Run value exists under HKCU."""
+    """True when the widget starts at sign-in (Run value on Windows, autostart file on Linux)."""
+    if paths.is_linux():
+        return setup_startup.linux_autostart_enabled()
     try:
         import winreg  # imported here so the module also loads on non-Windows systems
 
@@ -160,7 +165,9 @@ def is_startup_enabled() -> bool:
 
 
 def set_startup_enabled(enabled: bool) -> bool:
-    """Writes or deletes the Run value. Returns True when the change succeeded."""
+    """Writes or deletes the Run value / autostart file. Returns True when the change succeeded."""
+    if paths.is_linux():
+        return setup_startup.linux_set_autostart(enabled)
     try:
         import winreg
 
@@ -195,10 +202,35 @@ def seed_first_run_files(todo_path: str) -> None:
 
 
 _single_instance_mutex = None  # kept alive for the whole run so Windows holds the mutex
+_single_instance_lock = None  # Linux: the open lock file; the lock lasts as long as it stays open
+
+
+def acquire_linux_lock() -> bool:
+    """Takes the Linux single-instance lock. Returns False when another copy already runs.
+
+    ``fcntl.flock`` locks the file for as long as the process keeps it open, and the system
+    drops the lock by itself if the program crashes, so a stale lock can never block a restart.
+    """
+    global _single_instance_lock
+    import fcntl  # Linux only, so it is imported here
+
+    try:
+        handle = open(paths.lock_file(), "a+")
+    except OSError:
+        return True  # cannot even create the lock file: run anyway rather than refuse to start
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    _single_instance_lock = handle
+    return True
 
 
 def _focus_existing_widget(title: str) -> None:
-    """Brings the already-running widget window to the front."""
+    """Brings the already-running widget window to the front (Windows only)."""
+    if sys.platform != "win32":
+        return
     user32 = ctypes.windll.user32
     found: list[int] = []
 
@@ -351,6 +383,12 @@ class PillButton(QtWidgets.QPushButton):
         baseline = glass_theme.centred_baseline(rect.top(), rect.height(), metrics)
         tw = metrics.horizontalAdvance(self.text())
         x = int(rect.center().x() - tw / 2)
+
+        if paths.is_linux() and self.text() == "✕":
+            # Paint the cross as two lines: no font has to supply the glyph.
+            glass_theme.draw_cross(painter, rect.center(), 8, QColor(text_color))
+            painter.end()
+            return
 
         # Soft 1px text shadow + crisp text
         painter.setPen(QColor(0, 0, 0, 160))
@@ -568,11 +606,14 @@ class TaskItemWidget(QtWidgets.QWidget):
             metrics = QFontMetrics(font)
             base = glass_theme.centred_baseline(box_rect.top(), box_rect.height(), metrics)
             painter.setPen(QColor(glass_theme.EMERALD))
-            painter.drawText(
-                int(box_rect.center().x() - metrics.horizontalAdvance("✔") / 2),
-                int(base),
-                "✔",
-            )
+            if paths.is_linux():
+                glass_theme.draw_check(painter, box_rect.center(), 9, QColor(glass_theme.EMERALD))
+            else:
+                painter.drawText(
+                    int(box_rect.center().x() - metrics.horizontalAdvance("✔") / 2),
+                    int(base),
+                    "✔",
+                )
         else:
             ring_color = QColor(glass_theme.EDGE if self._hovered else glass_theme.C_LABEL)
             ring_color.setAlpha(220 if self._hovered else 130)
@@ -600,7 +641,10 @@ class TaskItemWidget(QtWidgets.QWidget):
         del_base = glass_theme.centred_baseline(0, self.height(), del_metrics)
         del_color = glass_theme.RED if self._del_hovered else (glass_theme.C_LABEL if self._hovered else "#5A6578")
         painter.setPen(QColor(del_color))
-        painter.drawText(self.width() - 20, int(del_base), "✕")
+        if paths.is_linux():
+            glass_theme.draw_cross(painter, QPointF(self.width() - 15, self.height() / 2), 8, QColor(del_color))
+        else:
+            painter.drawText(self.width() - 20, int(del_base), "✕")
 
         # Cyan insertion marker while another row hovers this one
         if self._drop_marker:
@@ -741,6 +785,8 @@ class DesktopTodoWidget(QtWidgets.QWidget):
         self.setWindowTitle(WINDOW_TITLE)
 
         # Set taskbar / window icon
+        self.tray = None  # set properly by _build_tray_icon
+        self.tray_menu = None
         self.tray_icon_obj = make_todo_tray_icon()
         self.setWindowIcon(self.tray_icon_obj)
 
@@ -841,7 +887,7 @@ class DesktopTodoWidget(QtWidgets.QWidget):
         self.btn_tasks.clicked.connect(lambda: self.show_tab("tasks"))
         self.btn_goals = PillButton("Goals", active=False, h=22)
         self.btn_goals.clicked.connect(lambda: self.show_tab("goals"))
-        self.btn_notepad = PillButton("Notepad", active=False, h=22)
+        self.btn_notepad = PillButton("Editor" if paths.is_linux() else "Notepad", active=False, h=22)
         self.btn_notepad.clicked.connect(self.manager.open_in_notepad)
 
         self.btn_pin = PillButton("Pin", active=self.is_always_on_top, h=22)
@@ -849,7 +895,7 @@ class DesktopTodoWidget(QtWidgets.QWidget):
 
         self.btn_close = PillButton("✕", active=False, color=glass_theme.RED, h=22)
         self.btn_close.setFixedWidth(28)
-        self.btn_close.clicked.connect(self.hide)  # Hide to tray instead of quitting
+        self.btn_close.clicked.connect(self._close_clicked)  # Hide to tray (quit when no tray)
 
         pill_row.addWidget(self.btn_tasks)
         pill_row.addWidget(self.btn_goals)
@@ -965,7 +1011,7 @@ class DesktopTodoWidget(QtWidgets.QWidget):
         footer_row = QtWidgets.QHBoxLayout()
         footer_row.setContentsMargins(4, 2, 0, 0)
 
-        lbl_hint = QtWidgets.QLabel("Drag to reorder · Ctrl+F12 snap")
+        lbl_hint = QtWidgets.QLabel("Drag to reorder" if paths.is_linux() else "Drag to reorder · Ctrl+F12 snap")
         lbl_hint.setFont(glass_theme.qt_font(8))
         lbl_hint.setStyleSheet(f"color: {glass_theme.C_FAINT}; background: transparent;")
         lbl_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -997,12 +1043,17 @@ class DesktopTodoWidget(QtWidgets.QWidget):
     # System Tray Icon & Menu
     # ------------------------------------------------------------------------------------
     def _build_tray_icon(self) -> None:
-        """Creates the Windows system tray icon and context menu."""
-        if not QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
-            return
+        """Builds the action menu, and shows it from a system tray icon when one exists.
 
-        self.tray = QtWidgets.QSystemTrayIcon(self.tray_icon_obj, self)
-        self.tray.setToolTip(WINDOW_TITLE)
+        The menu is always built. Without a tray (GNOME needs an extension for one) it is
+        reached by right-clicking the header of the card instead, so nothing is lost.
+        """
+        self.tray = None
+        self.tray_menu = None
+        has_tray = QtWidgets.QSystemTrayIcon.isSystemTrayAvailable()
+        if has_tray:
+            self.tray = QtWidgets.QSystemTrayIcon(self.tray_icon_obj, self)
+            self.tray.setToolTip(WINDOW_TITLE)
 
         menu = QtWidgets.QMenu(self)
         menu.setStyleSheet("""
@@ -1028,18 +1079,20 @@ class DesktopTodoWidget(QtWidgets.QWidget):
             }
         """)
 
-        act_toggle = menu.addAction("Show / Hide To-Do List")
-        act_toggle.triggered.connect(self._toggle_visibility)
+        if has_tray:  # hiding is only safe when a tray icon can bring the card back
+            act_toggle = menu.addAction("Show / Hide To-Do List")
+            act_toggle.triggered.connect(self._toggle_visibility)
 
-        act_notepad = menu.addAction("Open in Notepad")
+        act_notepad = menu.addAction("Open in Text Editor" if paths.is_linux() else "Open in Notepad")
         act_notepad.triggered.connect(self.manager.open_in_notepad)
 
-        act_snap = menu.addAction("Snap to Screen Corner (Ctrl+F12)")
-        act_snap.triggered.connect(self._on_snap_hotkey)
+        if not paths.is_linux():  # nothing can move windows on Wayland
+            act_snap = menu.addAction("Snap to Screen Corner (Ctrl+F12)")
+            act_snap.triggered.connect(self._on_snap_hotkey)
 
         menu.addSeparator()
 
-        self.act_startup = menu.addAction("Start with Windows")
+        self.act_startup = menu.addAction("Start when I sign in" if paths.is_linux() else "Start with Windows")
         self.act_startup.setCheckable(True)
         self.act_startup.setChecked(is_startup_enabled())
         self.act_startup.toggled.connect(self._toggle_startup)
@@ -1080,9 +1133,26 @@ class DesktopTodoWidget(QtWidgets.QWidget):
         act_quit = menu.addAction("Quit To-Do Widget")
         act_quit.triggered.connect(QtWidgets.QApplication.instance().quit)
 
-        self.tray.setContextMenu(menu)
-        self.tray.activated.connect(self._on_tray_activated)
-        self.tray.show()
+        self.tray_menu = menu
+        if self.tray is not None:
+            self.tray.setContextMenu(menu)
+            self.tray.activated.connect(self._on_tray_activated)
+            self.tray.show()
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        """Right-click on the header shows the same menu as the tray icon."""
+        if self.tray_menu is not None and event.pos().y() <= HEADER_DRAG_MAX_Y:
+            self.tray_menu.exec(event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
+
+    def _close_clicked(self) -> None:
+        """The red cross: hide to the tray, or quit when there is no tray to restore from."""
+        if self.tray is not None:
+            self.hide()
+        else:
+            QtWidgets.QApplication.instance().quit()
 
     def _toggle_startup(self, enabled: bool) -> None:
         """Adds or removes the widget's HKCU Run entry, then shows what really happened."""
@@ -1211,6 +1281,13 @@ class DesktopTodoWidget(QtWidgets.QWidget):
                     self.grabMouse()
                 event.accept()
                 return
+            # On Linux (Wayland) a program may not place its own window, but it may ask the
+            # compositor to run the move. If that is refused we fall back to the plain drag.
+            if paths.is_linux():
+                handle = self.windowHandle()
+                if handle is not None and handle.startSystemMove():
+                    event.accept()
+                    return
             # Dragging anywhere on the card background (header, footer, or empty space) moves window
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             if self.mouseGrabber() != self:
@@ -1538,7 +1615,10 @@ def main() -> None:
 
     # Only one widget may run: a second launch just focuses the first window.
     # (The self-test builds its own hidden widget, so it skips this check.)
-    if not args.selftest:
+    if not args.selftest and paths.is_linux():
+        if not acquire_linux_lock():
+            return  # a copy is already running: exit quietly with code 0
+    elif not args.selftest:
         _single_instance_mutex = ctypes.windll.kernel32.CreateMutexW(
             None, False, "Local" + chr(92) + paths.INSTANCE_KEY
         )
@@ -1547,13 +1627,14 @@ def main() -> None:
             return
 
     # Ensure thread is attached to the interactive user desktop (WinSta0\Default)
-    try:
-        user32 = ctypes.windll.user32
-        h_desk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
-        if h_desk:
-            user32.SetThreadDesktop(h_desk)
-    except Exception:
-        pass
+    if sys.platform == "win32":
+        try:
+            user32 = ctypes.windll.user32
+            h_desk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
+            if h_desk:
+                user32.SetThreadDesktop(h_desk)
+        except Exception:
+            pass
 
     app = QtWidgets.QApplication.instance()
     if not app:
@@ -1561,7 +1642,7 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)
 
     # First run: start with the bundled example tasks instead of a blank file.
-    if args.todo_file == DEFAULT_TODO_PATH:
+    if args.todo_file == DEFAULT_TODO_PATH and not paths.is_linux():
         seed_first_run_files(args.todo_file)
 
     widget = DesktopTodoWidget(args.todo_file, args.goals_file, args.config)

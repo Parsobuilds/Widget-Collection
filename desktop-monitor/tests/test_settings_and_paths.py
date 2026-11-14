@@ -50,6 +50,7 @@ class PathTests(unittest.TestCase):
     def test_resource_path_source(self):
         self.assertEqual(dm.resource_path("x").parent, Path(dm.__file__).parent)
 
+    @unittest.skipUnless(sys.platform.startswith("win"), "Windows registry autostart")
     def test_autostart_value_name_and_write(self):
         fake = FakeWinreg()
         with mock.patch.object(dm, "winreg", fake):

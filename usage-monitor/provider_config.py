@@ -1,9 +1,11 @@
 """Provider configuration for Usage Monitor (``config.json``).
 
-The file lives at ``%APPDATA%\\DesktopWidgets\\UsageMonitor\\config.json`` and
-holds only the user's provider choices and their non-secret settings. API
-keys never appear here: they go to ``secrets_store`` (Windows Credential
-Manager). A missing, empty or unreadable file means "no providers yet".
+The file lives at ``%APPDATA%\\DesktopWidgets\\UsageMonitor\\config.json`` on
+Windows and ``$XDG_CONFIG_HOME/DesktopWidgets/UsageMonitor/config.json`` on
+Linux, and holds only the user's provider choices and their non-secret
+settings. API keys never appear here: they go to ``secrets_store`` (Windows
+Credential Manager, or the Secret Service on Linux). A missing, empty or
+unreadable file means "no providers yet".
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
+import tempfile
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -60,11 +64,33 @@ def default_config() -> dict[str, Any]:
     return {"version": CONFIG_VERSION, "poll_minutes": DEFAULT_POLL_MINUTES, "providers": []}
 
 
+def config_root() -> Path:
+    """Return the folder that holds the ``DesktopWidgets`` folder.
+
+    Windows: ``%APPDATA%`` (or the usual Roaming folder when it is missing).
+    Linux: ``$XDG_CONFIG_HOME`` when it is an absolute path, else ``~/.config``.
+    """
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if xdg and os.path.isabs(xdg):  # the XDG rules say a relative value must be ignored
+        return Path(xdg)
+    return Path.home() / ".config"
+
+
 def data_dir() -> Path:
-    """Return ``%APPDATA%\\DesktopWidgets\\UsageMonitor``, creating it if needed."""
-    appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-    folder = Path(appdata) / "DesktopWidgets" / "UsageMonitor"
-    folder.mkdir(parents=True, exist_ok=True)
+    """Return ``<config root>/DesktopWidgets/UsageMonitor``, creating it if needed."""
+    folder = config_root() / "DesktopWidgets" / "UsageMonitor"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        if sys.platform == "win32":
+            raise
+        # Linux with an empty or unwritable HOME (for example HOME=""): keep running
+        # with a temporary folder instead of crashing. Nothing secret is ever stored here.
+        folder = Path(tempfile.gettempdir()) / "DesktopWidgets" / "UsageMonitor"
+        folder.mkdir(parents=True, exist_ok=True)
     return folder
 
 

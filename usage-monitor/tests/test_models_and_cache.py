@@ -63,7 +63,7 @@ class ModelsTests(unittest.TestCase):
 class CacheTests(unittest.TestCase):
     def test_default_path(self) -> None:
         with TempProfile() as profile:
-            self.assertEqual(default_cache_path(), profile.appdata / "DesktopWidgets" / "UsageMonitor" / "cache.json")
+            self.assertEqual(default_cache_path(), profile.config_root / "DesktopWidgets" / "UsageMonitor" / "cache.json")
 
     def test_keeps_last_good_and_marks_stale(self) -> None:
         with TempProfile() as profile:

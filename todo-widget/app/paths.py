@@ -32,6 +32,10 @@ APP_NAME = "TodoWidget"
 INSTANCE_KEY = "DesktopWidgets.TodoWidget"
 RUN_VALUE_NAME = "DesktopWidgets.TodoWidget"
 
+# Linux names (fixed for the whole suite): autostart entry and single-instance lock.
+AUTOSTART_FILE_NAME = "desktopwidgets-todo.desktop"
+LOCK_FILE_NAME = "desktopwidgets-todo.lock"
+
 
 def is_frozen() -> bool:
     """True when running from the PyInstaller-built executable."""
@@ -55,9 +59,38 @@ def _make(folder: str) -> str:
     return folder
 
 
+def is_linux() -> bool:
+    """True on Linux. Checked at call time so a test can patch ``sys.platform``."""
+    return sys.platform.startswith("linux")
+
+
 def appdata_dir() -> str:
-    """The user's roaming application-data folder (``%APPDATA%``)."""
+    """The folder that holds the ``DesktopWidgets`` suite folder.
+
+    Windows: the roaming application-data folder (``%APPDATA%``).
+    Linux: ``$XDG_CONFIG_HOME`` (default ``~/.config``).
+    """
+    if is_linux():
+        return os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+
+
+def runtime_dir() -> str:
+    """Folder for the single-instance lock: ``$XDG_RUNTIME_DIR``, else the data folder."""
+    folder = os.environ.get("XDG_RUNTIME_DIR", "")
+    if folder and os.path.isdir(folder):
+        return folder
+    return data_dir()
+
+
+def lock_file() -> str:
+    """Path of the Linux single-instance lock file."""
+    return os.path.join(runtime_dir(), LOCK_FILE_NAME)
+
+
+def autostart_file() -> str:
+    """Path of the Linux autostart entry (``$XDG_CONFIG_HOME/autostart/...desktop``)."""
+    return os.path.join(appdata_dir(), "autostart", AUTOSTART_FILE_NAME)
 
 
 def suite_dir() -> str:

@@ -40,6 +40,7 @@ from providers.base import (
     home_dir,
     http_json,
     make_row,
+    profile_text,
     read_json_file,
 )
 
@@ -225,7 +226,7 @@ class AntigravityKind(ProviderKind):
             kind="path",
             required=False,
             default="",
-            placeholder="%USERPROFILE%\\.t3\\userdata\\providers\\antigravity\\...\\acp_token.json",
+            placeholder=profile_text(".t3", "userdata", "providers", "antigravity", "...", "acp_token.json"),
             help="Filled in by Detect. Leave empty to search the standard location.",
         )
     ]
@@ -244,7 +245,7 @@ class AntigravityKind(ProviderKind):
         if found is None:
             raise ProviderError(
                 ProviderError.NOT_FOUND,
-                "No Antigravity sign-in found under %USERPROFILE%\\.t3. Sign in to Antigravity in T3 Code first.",
+                f"No Antigravity sign-in found under {profile_text('.t3')}. Sign in to Antigravity in T3 Code first.",
             )
         return found
 

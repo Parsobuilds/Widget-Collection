@@ -10,6 +10,21 @@ import support  # noqa: E402
 
 dm = support.import_monitor()
 
+# On Linux the worker reads this machine's hwmon / drm. Pin both to "nothing" so
+# the "all sensors missing" tests give the same answer on every computer.
+_NO_LINUX_HARDWARE = [mock.patch.object(dm, "read_drm_gpu", return_value=None),
+                      mock.patch.object(dm, "linux_cpu_temp", return_value=None)]
+
+
+def setUpModule():
+    for patcher in _NO_LINUX_HARDWARE:
+        patcher.start()
+
+
+def tearDownModule():
+    for patcher in _NO_LINUX_HARDWARE:
+        patcher.stop()
+
 
 def make_worker(pynvml=None, wmi=None):
     worker = dm.MetricsWorker(1000)

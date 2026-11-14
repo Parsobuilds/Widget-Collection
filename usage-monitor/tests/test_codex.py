@@ -16,7 +16,7 @@ import samples  # noqa: E402
 from fakes import FakeHttp, KeyringMixin, TempProfile, http_error, instance  # noqa: E402
 
 from providers import registry  # noqa: E402
-from providers.base import ProviderError  # noqa: E402
+from providers.base import IS_WINDOWS, ProviderError, profile_text  # noqa: E402
 from providers.codex import CodexKind, default_auth_path, parse_payload, window_name  # noqa: E402
 
 FAKE_ACCESS = "fake-codex-access-0000"
@@ -58,7 +58,7 @@ class DetectAndFetchTests(KeyringMixin, unittest.TestCase):
             profile.write_json(".codex/auth.json", AUTH)
             result = CodexKind().detect()
         self.assertTrue(result.found)
-        self.assertEqual(result.path, "%USERPROFILE%\\.codex\\auth.json")
+        self.assertEqual(result.path, profile_text(".codex", "auth.json"))
 
     def test_detect_not_found(self) -> None:
         with TempProfile():
@@ -83,7 +83,7 @@ class DetectAndFetchTests(KeyringMixin, unittest.TestCase):
                 path, shown = default_auth_path()
                 result = CodexKind().detect()
         self.assertEqual(path, other / "auth.json")
-        self.assertEqual(shown, "%CODEX_HOME%\\auth.json")
+        self.assertEqual(shown, "%CODEX_HOME%\\auth.json" if IS_WINDOWS else "$CODEX_HOME/auth.json")
         self.assertTrue(result.found)
 
     def test_fetch_headers_and_rows(self) -> None:

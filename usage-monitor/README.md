@@ -40,3 +40,19 @@ cd usage-monitor
 
 The tests are offline: HTTP replies are mocked, keyring is an in-memory fake and `APPDATA`
 points at a temporary folder.
+
+## Linux
+
+Usage Monitor runs on Linux with the same features as on Windows.
+
+- **Data folder:** `$XDG_CONFIG_HOME/DesktopWidgets/UsageMonitor` (default `~/.config/...`).
+  The shared background file is `$XDG_CONFIG_HOME/DesktopWidgets/widget_background.json`.
+- **Keys:** kept in the Secret Service (gnome-keyring, KWallet) through `keyring`. With no key
+  store, Settings says "No key store is available on this computer..." and refuses to save a
+  key. A key is never written to `config.json`, `widget_state.json` or the log.
+- **Start when I sign in:** writes `$XDG_CONFIG_HOME/autostart/desktopwidgets-usage.desktop`.
+- **One copy only:** a `flock` lock called `desktopwidgets-usage.lock` in `$XDG_RUNTIME_DIR`.
+- **No tray (for example GNOME):** click the gear on the card, right-click the card for the
+  menu, or start with `--settings` to open Settings straight away.
+- **Tests:** `python -m unittest discover -s tests -p "test_*.py"` (offscreen:
+  `QT_QPA_PLATFORM=offscreen`). Install `gnome-keyring` and `libsecret-tools` to try it for real.

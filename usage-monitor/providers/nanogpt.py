@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from models import UsageRow
 from providers import _t3db
 from providers.base import (
+    SECRET_STORE_HELP,
     FieldSpec,
     ProviderError,
     ProviderKind,
@@ -74,7 +75,7 @@ class NanoGPTKind(ProviderKind):
     stability = "official"
     docs_url = "https://docs.nano-gpt.com/api-reference/endpoint/check-balance"
     fields = [
-        FieldSpec(key="api_key", label="API key", kind="secret", help="Saved in Windows Credential Manager."),
+        FieldSpec(key="api_key", label="API key", kind="secret", help=SECRET_STORE_HELP),
         FieldSpec(
             key="t3_provider_instance",
             label="T3 Code provider name (optional)",

@@ -7,9 +7,14 @@ wallpaper and below every normal window*. Locked by default, so it is fully
 click-through: every click goes to the desktop and its icons. A system-tray icon
 opens Settings / Move / Lock / Opacity / disk I/O / Start-with-Windows / Quit.
 
-Dependencies (Windows only)
----------------------------
-    pip install -r requirements.txt
+On Linux the same card runs as a normal frameless window (no WorkerW trick),
+with the gear on the card (or --settings) opening Settings, and a tray menu
+when the desktop has one.
+
+Dependencies
+------------
+    pip install -r requirements.txt        # Windows (adds WMI / pywin32)
+    pip install PySide6 psutil nvidia-ml-py Pillow     # Linux
 
 Run
 ---
@@ -18,8 +23,10 @@ Run
     python desktop_monitor.py --selftest       # print readings, save a picture of the card
     python desktop_monitor.py --selftest --simulate-no-gpu   # same, pretending no NVIDIA card
 
-CPU temperature needs the optional CpuTempHelper (see cpu_temp_helper.py).
-Settings and logs live in the DesktopWidgets/DesktopMonitor folder inside %APPDATA%.
+CPU temperature: Windows needs the optional CpuTempHelper (see cpu_temp_helper.py);
+Linux reads it from psutil.sensors_temperatures().
+Settings and logs live in the DesktopWidgets/DesktopMonitor folder inside %APPDATA%
+(Windows) or $XDG_CONFIG_HOME (Linux, default ~/.config).
 """
 
 from __future__ import annotations
@@ -65,15 +72,27 @@ except ImportError:
 if os.environ.get("DESKTOP_MONITOR_SIMULATE_NO_GPU") or "--simulate-no-gpu" in sys.argv:
     pynvml = None
 
-try:
-    import wmi
-except ImportError:
-    wmi = None
+# Platform flags first: the Windows-only modules below are only imported on Windows.
+IS_WINDOWS = sys.platform.startswith("win")
+IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
-try:
-    import pythoncom
-except ImportError:
-    pythoncom = None
+wmi = None
+pythoncom = None
+winreg = None
+if IS_WINDOWS:
+    try:
+        import wmi
+    except ImportError:
+        wmi = None
+    try:
+        import pythoncom
+    except ImportError:
+        pythoncom = None
+    try:
+        import winreg
+    except ImportError:
+        winreg = None
 
 try:
     from PIL import Image, ImageDraw, ImageFilter
@@ -81,14 +100,6 @@ except ImportError:
     Image = None
     ImageDraw = None
     ImageFilter = None
-
-try:
-    import winreg
-except ImportError:
-    winreg = None
-
-IS_WINDOWS = sys.platform.startswith("win")
-IS_MAC = sys.platform == "darwin"
 
 if IS_WINDOWS:
     user32 = ctypes.windll.user32
@@ -101,13 +112,39 @@ else:
 PRODUCT_DIR_NAME = "DesktopWidgets"
 APP_DIR_NAME = "DesktopMonitor"
 RUN_VALUE_NAME = "DesktopWidgets.DesktopMonitor"       # HKCU Run value
+AUTOSTART_FILE_NAME = "desktopwidgets-desktop.desktop"  # Linux autostart entry
+LOCK_FILE_NAME = "desktopwidgets-desktop.lock"          # Linux single-instance lock
 SINGLE_INSTANCE_NAME = "DesktopWidgets.DesktopMonitor"
 HELPER_TASK_NAME = "DesktopWidgets CPU Temperature"    # scheduled task made by CpuTempHelper --install
 HELPER_EXE_NAME = "CpuTempHelper.exe"
 
 
+def home_folder() -> Path:
+    """The user's home folder. An empty or missing HOME is treated as unset."""
+    home = os.environ.get("HOME")
+    if home:
+        return Path(home)
+    try:
+        import pwd                      # Linux / macOS only
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except Exception:
+        import tempfile
+        return Path(tempfile.gettempdir())
+
+
+def config_home() -> Path:
+    """Linux: $XDG_CONFIG_HOME, or ~/.config when it is unset, empty or relative."""
+    xdg = os.environ.get("XDG_CONFIG_HOME") or ""
+    if xdg and os.path.isabs(xdg):
+        return Path(xdg)
+    return home_folder() / ".config"
+
+
 def appdata_root() -> Path:
-    """The user's Roaming AppData folder, never a literal path."""
+    """The folder that holds DesktopWidgets/: Roaming AppData on Windows,
+    $XDG_CONFIG_HOME on Linux. Never a literal path."""
+    if not IS_WINDOWS:
+        return config_home()
     return Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
 
 
@@ -253,15 +290,13 @@ def fmt_num(value, decimals: int = 1) -> str:
 def _font_name() -> str:
     if IS_WINDOWS:
         return "Segoe UI Variable"
-    if IS_MAC:
-        return "SF UI Text"
-    return ""
+    return ""         # Linux and others: the Qt default sans family
 
 
 def make_font(pt: int, semibold: bool = False, letterspacing: float = 0.0) -> QtGui.QFont:
     """Segoe UI Variable, falling back to Segoe UI then the Qt default."""
-    name = _font_name() or "Segoe UI"
-    font = QtGui.QFont(name)
+    name = _font_name()
+    font = QtGui.QFont(name) if name else QtGui.QFont()
     if not font.families():
         font = QtGui.QFont()
     font.setPointSize(pt)
@@ -718,14 +753,80 @@ def parse_gpu_engine_load(instances):
 
 
 def normalise_mount(mount) -> str:
-    """Comparable form of a drive mount point ("c:\\" -> "C:")."""
-    return str(mount or "").upper().rstrip("\\/")
+    """Comparable form of a mount point.
+
+    Windows: "c:\\" -> "C:". Linux paths are case sensitive and "/" must stay "/".
+    """
+    text = str(mount or "")
+    if text.startswith("/"):
+        return text.rstrip("/") or "/"
+    return text.upper().rstrip("\\/")
+
+
+# File systems that are not real storage (Linux). Anything starting with "fuse."
+# is also skipped, except a few that mount real drives (see linux_partitions).
+PSEUDO_FSTYPES = {
+    "squashfs", "tmpfs", "devtmpfs", "overlay", "proc", "sysfs", "cgroup", "cgroup2",
+    "autofs", "efivarfs", "bpf", "tracefs", "debugfs", "securityfs", "pstore",
+    "configfs", "fusectl", "mqueue", "hugetlbfs", "binfmt_misc", "ramfs", "nsfs",
+    "rpc_pipefs", "devpts", "iso9660", "udf", "erofs", "aufs", "fuse", "squashfuse",
+}
+REAL_FUSE_FSTYPES = {"fuse.sshfs", "fuse.ntfs-3g", "fuse.exfat", "fuse.mergerfs"}
+# The EFI boot partition is real but is not somewhere a person keeps files.
+PSEUDO_MOUNT_PREFIXES = ("/proc", "/sys", "/dev", "/snap", "/var/snap", "/var/lib/snapd",
+                         "/var/lib/docker", "/var/lib/containers", "/boot/efi",
+                         "/boot/firmware")
+
+
+def linux_partition_ok(part) -> bool:
+    """True for a partition that is real storage a person would want on the card."""
+    fstype = (getattr(part, "fstype", "") or "").lower()
+    device = getattr(part, "device", "") or ""
+    mount = getattr(part, "mountpoint", "") or ""
+    if not fstype or not mount:
+        return False
+    if fstype in PSEUDO_FSTYPES:
+        return False
+    if fstype.startswith("fuse.") and fstype not in REAL_FUSE_FSTYPES:
+        return False
+    if device.startswith("/dev/loop"):
+        return False
+    for prefix in PSEUDO_MOUNT_PREFIXES:
+        if mount == prefix or mount.startswith(prefix + "/"):
+            return False
+    # /run is runtime state, but removable drives are mounted under /run/media.
+    if (mount == "/run" or mount.startswith("/run/")) and not mount.startswith("/run/media/"):
+        return False
+    return True
+
+
+def linux_partitions(parts):
+    """Filter psutil partitions for Linux: no pseudo file systems, one row per device.
+
+    Bind mounts and btrfs subvolumes list the same device several times; the
+    shortest mount point wins ("/" before "/var/lib/something").
+    """
+    best = {}
+    order = []
+    for part in parts:
+        if not linux_partition_ok(part):
+            continue
+        key = part.device or part.mountpoint
+        known = best.get(key)
+        if known is None:
+            order.append(key)
+            best[key] = part
+        elif len(part.mountpoint) < len(known.mountpoint):
+            best[key] = part
+    return [best[key] for key in order]
 
 
 def fixed_partitions():
     """Fixed (non-removable, non-optical) drives with a file system."""
     if psutil is None:
         return []
+    if not IS_WINDOWS:
+        return linux_partitions(psutil.disk_partitions(all=False))
     keep = []
     for part in psutil.disk_partitions(all=False):
         opts = (part.opts or "").lower()
@@ -736,6 +837,106 @@ def fixed_partitions():
             continue
         keep.append(part)
     return keep
+
+
+CPU_SENSOR_ORDER = ("coretemp", "k10temp", "zenpower", "cpu_thermal")
+CPU_PREFERRED_LABELS = ("package", "tctl", "tdie", "cpu")
+
+
+def linux_cpu_name():
+    """Marketing name of the CPU from /proc/cpuinfo, or None."""
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.lower().startswith("model name"):
+                    return " ".join(line.split(":", 1)[1].split()) or None
+    except OSError:
+        pass
+    return None
+
+
+def linux_cpu_temp(sensors=None):
+    """CPU temperature in degrees C from psutil's hwmon data, or None.
+
+    Tries coretemp (Intel), k10temp and zenpower (AMD), cpu_thermal (ARM) in that
+    order. Within a chip the package/Tctl reading wins, else the hottest core.
+    Never raises: no sensors at all simply gives None (a dash on the card).
+    """
+    if sensors is None:
+        if psutil is None or not hasattr(psutil, "sensors_temperatures"):
+            return None
+        try:
+            sensors = psutil.sensors_temperatures()
+        except Exception as exc:
+            log_line("sensors_temperatures failed: %s" % exc)
+            return None
+    for chip in CPU_SENSOR_ORDER:
+        entries = [e for e in (sensors.get(chip) or [])
+                   if getattr(e, "current", None) is not None]
+        if not entries:
+            continue
+        for entry in entries:
+            label = (getattr(entry, "label", "") or "").lower()
+            if label.startswith(CPU_PREFERRED_LABELS):
+                return float(entry.current)
+        return max(float(e.current) for e in entries)
+    return None
+
+
+DRM_VENDORS = {"0x1002": "AMD graphics", "0x8086": "Intel graphics", "0x10de": "NVIDIA graphics"}
+
+
+def _read_text(path: Path):
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+
+
+def _read_number(path: Path):
+    text = _read_text(path)
+    try:
+        return float(text) if text is not None else None
+    except ValueError:
+        return None
+
+
+def read_drm_gpu(root=None):
+    """Basic GPU facts from /sys/class/drm for cards without NVML (AMD, Intel...).
+
+    Returns {"name", "load", "temp", "vram_used", "vram_total"} (None for what the
+    driver does not expose; VRAM in GiB) or None when there is no graphics card.
+    `root` is only given by the tests.
+    """
+    base = Path(root) if root is not None else Path("/sys/class/drm")
+    try:
+        cards = sorted(p for p in base.iterdir()
+                       if p.name.startswith("card") and p.name[4:].isdigit())
+    except OSError:
+        return None
+    gib = 1024.0 * 1024.0 * 1024.0
+    for card in cards:
+        device = card / "device"
+        vendor = _read_text(device / "vendor")
+        if vendor is None:
+            continue
+        info = {"name": DRM_VENDORS.get(vendor.lower(), "Graphics adapter"),
+                "load": _read_number(device / "gpu_busy_percent"),
+                "temp": None, "vram_used": None, "vram_total": None}
+        used = _read_number(device / "mem_info_vram_used")
+        total = _read_number(device / "mem_info_vram_total")
+        if used is not None and total:
+            info["vram_used"], info["vram_total"] = used / gib, total / gib
+        try:
+            for hwmon in sorted((device / "hwmon").iterdir()):
+                milli = _read_number(hwmon / "temp1_input")
+                if milli is not None:
+                    info["temp"] = milli / 1000.0
+                    break
+        except OSError:
+            pass
+        return info
+    return None
 
 
 def detect_fixed_drives():
@@ -842,6 +1043,8 @@ class MetricsWorker(QtCore.QObject):
             except Exception as exc:
                 log_line("WMI CPU name unavailable: %s" % exc)
             self._disk_map = self._build_disk_map()
+        if not self._cpu_name and IS_LINUX:
+            self._cpu_name = linux_cpu_name()
         if not self._cpu_name:
             try:
                 self._cpu_name = platform.processor() or None
@@ -863,8 +1066,13 @@ class MetricsWorker(QtCore.QObject):
                 self._nvml_ready = False
                 log_line("NVML unavailable: %s" % exc)
         if not self._gpu_name:
-            # No NVIDIA driver: ask Windows which graphics adapter this PC has.
-            self._gpu_name = self._wmi_gpu_name()
+            if IS_LINUX:
+                # No NVML: look at /sys/class/drm (AMD / Intel / nothing).
+                drm = read_drm_gpu()
+                self._gpu_name = drm["name"] if drm else None
+            else:
+                # No NVIDIA driver: ask Windows which graphics adapter this PC has.
+                self._gpu_name = self._wmi_gpu_name()
 
         if psutil is not None:
             try:
@@ -902,13 +1110,15 @@ class MetricsWorker(QtCore.QObject):
             log_line("disk I/O mapping failed: %s" % exc)
         return mapping
 
-    def _io_key_for(self, mountpoint: str):
+    def _io_key_for(self, mountpoint: str, device: str = ""):
         if IS_WINDOWS:
             return self._disk_map.get(mountpoint.upper().rstrip("\\"))
-        name = mountpoint.replace("/dev/", "")
-        if name.startswith("nvme"):
-            return name.split("p")[0]
-        return name
+        # Linux: psutil.disk_io_counters(perdisk=True) is keyed by the kernel
+        # name of the partition ("nvme0n1p2", "sda1", "dm-0"), which is the
+        # device node's real name (LVM names under /dev/mapper are symlinks).
+        if not device.startswith("/dev/"):
+            return None
+        return os.path.basename(os.path.realpath(device))
 
     # -- CPU temperature chain -------------------------------------------------
     def _lhm_cpu_temp(self):
@@ -963,6 +1173,9 @@ class MetricsWorker(QtCore.QObject):
 
     def cpu_temperature(self):
         """Returns (degrees, is_approximate). None when nothing is readable."""
+        if not IS_WINDOWS:
+            # Linux: hwmon through psutil. No helper, no admin rights.
+            return linux_cpu_temp(), False
         value = helper_cpu_temp()
         if value is not None:
             return value, False
@@ -983,6 +1196,16 @@ class MetricsWorker(QtCore.QObject):
         except Exception as exc:
             log_line("NVML read failed: %s" % exc)
             return default
+
+    def _nvml_memory(self):
+        """VRAM totals. On Linux ask for the v2 structure, whose "used" matches
+        nvidia-smi (the v1 figure also counts memory the driver reserves)."""
+        if IS_LINUX and hasattr(pynvml, "nvmlMemory_v2"):
+            try:
+                return pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle, pynvml.nvmlMemory_v2)
+            except Exception:
+                pass          # older driver or library: use the plain call below
+        return pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle)
 
     def _engine_load(self):
         """GPU load for any vendor from the Windows "GPU Engine" counters."""
@@ -1005,11 +1228,16 @@ class MetricsWorker(QtCore.QObject):
                 self._gpu_handle, pynvml.NVML_TEMPERATURE_GPU))
             if temp is not None:
                 data["temp"] = float(temp)
-            memory = self._nvml_value(lambda: pynvml.nvmlDeviceGetMemoryInfo(self._gpu_handle))
+            memory = self._nvml_value(self._nvml_memory)
             if memory is not None:
                 data["vram_used"] = memory.used / gib
                 data["vram_total"] = memory.total / gib
             return data
+        if IS_LINUX:
+            drm = read_drm_gpu()
+            if drm is not None:
+                return {k: drm[k] for k in empty}
+            return empty
         if IS_WINDOWS and wmi is not None:
             for namespace in ("root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"):
                 connection = self._wmi_namespace(namespace)
@@ -1068,7 +1296,7 @@ class MetricsWorker(QtCore.QObject):
                 "read_mbps": None,
                 "write_mbps": None,
             }
-            key = self._io_key_for(part.mountpoint)
+            key = self._io_key_for(part.mountpoint, getattr(part, "device", ""))
             if counters and key and key in counters:
                 entry = counters[key]
                 previous = self._io_last.get(key)
@@ -1247,7 +1475,9 @@ def scaled_wallpaper(image, width, height, style, tile):
 # Shared with the other desktop widgets: one background for all of them.
 WIDGET_BG_CONFIG_PATH = appdata_root() / PRODUCT_DIR_NAME / "widget_background.json"
 # Older widget versions kept this file here. Read-only fallback, never written.
-LEGACY_BG_CONFIG_PATH = appdata_root() / "TomTodoList" / "widget_background.json"
+# Linux never had an older location, so there is no fallback there.
+LEGACY_BG_CONFIG_PATH = (appdata_root() / "TomTodoList" / "widget_background.json"
+                         if IS_WINDOWS else None)
 
 BG_DEFAULTS = {
     "image_path": "",
@@ -1265,6 +1495,8 @@ def read_bg_file():
     Reads the new file; only when it does not exist, the legacy file.
     """
     for path in (WIDGET_BG_CONFIG_PATH, LEGACY_BG_CONFIG_PATH):
+        if path is None:
+            continue
         try:
             if not path.is_file():
                 continue
@@ -1283,7 +1515,8 @@ def custom_bg_settings():
     if not raw:
         return None
     try:
-        source = WIDGET_BG_CONFIG_PATH if WIDGET_BG_CONFIG_PATH.is_file() else LEGACY_BG_CONFIG_PATH
+        source = (WIDGET_BG_CONFIG_PATH if WIDGET_BG_CONFIG_PATH.is_file()
+                  or LEGACY_BG_CONFIG_PATH is None else LEGACY_BG_CONFIG_PATH)
         cfg_mtime = source.stat().st_mtime
         image_path = str(raw.get("image_path") or "").strip()
         if not image_path or not os.path.isfile(image_path):
@@ -1424,6 +1657,10 @@ PROTECTED_PROCS = {
     "winlogon.exe", "services.exe", "lsass.exe", "lsaiso.exe", "svchost.exe",
     "dwm.exe", "fontdrvhost.exe", "explorer.exe", "sihost.exe", "ctfmon.exe",
     "msmpeng.exe", "secure system", "conhost.exe", "audiodg.exe",
+    # Linux: ending these logs the person out or breaks the desktop.
+    "systemd", "init", "kthreadd", "xorg", "xwayland", "gnome-shell", "gnome-session-binary",
+    "dbus-daemon", "dbus-broker", "gdm", "gdm3", "gdm-session-wor", "sshd", "networkmanager",
+    "pipewire", "wireplumber", "systemd-logind", "login", "polkitd",
 }
 MIN_W = 280           # resize limits (logical px); log table needs ~280
 MAX_W = 700
@@ -1507,7 +1744,9 @@ C_TEXT2 = "#D0D7E3"
 
 def qt_font(size_pt, bold=False, family_hint=None):
     font = QtGui.QFont()
-    for family in (family_hint, "Segoe UI Variable", "Segoe UI"):
+    # Segoe fonts only exist on Windows; elsewhere keep Qt's default sans family.
+    fallbacks = ("Segoe UI Variable", "Segoe UI") if IS_WINDOWS else ()
+    for family in (family_hint,) + fallbacks:
         if family:
             font.setFamily(family)
             break
@@ -1550,6 +1789,8 @@ class MonitorWidget(QtWidgets.QWidget):
             # use (it shows solid black). paintEvent fills every pixel instead.
             self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        if IS_LINUX:
+            self.apply_linux_window_flags()
         self._disk_zones = []             # (QRectF, mount) right-click areas, set in paint
         self._resizing = False            # live edge resize in progress
         self._pending_resize = None       # latest (l, t, r, b, edges) from the mouse hook
@@ -1581,6 +1822,19 @@ class MonitorWidget(QtWidgets.QWidget):
         self.setFixedSize(self._w, self._height)
         self._pos = self._default_position()
         self.setGeometry(self._pos[0], self._pos[1], self._w, self._height)
+
+    def apply_linux_window_flags(self):
+        """Linux has no WorkerW layer: locked = ask the window manager to keep the
+        card at the bottom (honoured on X11, ignored on Wayland, where it just
+        floats); Move mode = on top so it can be seen and dragged."""
+        flags = Qt.FramelessWindowHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
+        flags |= (Qt.WindowStaysOnTopHint if move_mode(self.config)
+                  else Qt.WindowStaysOnBottomHint)
+        was_visible = self.isVisible()
+        self.setWindowFlags(flags)
+        if was_visible:
+            self.show()
+            self.move(self._pos[0], self._pos[1])
 
     # -- geometry -------------------------------------------------------------
     def _default_position(self):
@@ -1639,8 +1893,10 @@ class MonitorWidget(QtWidgets.QWidget):
         return height
 
     def _show_gpu(self):
-        """False only when the snapshot says this PC has no graphics adapter at all."""
-        return bool(self._snapshot.get("gpu_present", True))
+        """False only when the snapshot says this PC has no graphics adapter at all.
+
+        On Linux the block stays and says "No GPU readings" instead."""
+        return bool(self._snapshot.get("gpu_present", True)) or IS_LINUX
 
     @staticmethod
     def _clamp_w(value):
@@ -1744,7 +2000,8 @@ class MonitorWidget(QtWidgets.QWidget):
 
     def show_disk_menu(self, mount):
         menu = QtWidgets.QMenu()
-        action = menu.addAction("Open folder in File Explorer")
+        action = menu.addAction("Open folder in File Explorer" if IS_WINDOWS
+                                else "Open folder in the file manager")
         if menu.exec(QtGui.QCursor.pos()) is action:
             try:
                 if IS_WINDOWS:
@@ -1815,6 +2072,11 @@ class MonitorWidget(QtWidgets.QWidget):
         path = QPainterPath()
         path.addRoundedRect(body, CORNER_RADIUS, CORNER_RADIUS)
 
+        if not IS_WINDOWS:
+            # The window is translucent here (no region clip like on Windows), so
+            # keep the background inside the rounded body.
+            painter.save()
+            painter.setClipPath(path)
         background = self.refresh_blur()
         if background is not None:
             if self._resizing:
@@ -1823,6 +2085,8 @@ class MonitorWidget(QtWidgets.QWidget):
                 painter.drawPixmap(0, 0, background)   # sharp edges + blurred body
         else:
             painter.fillRect(QRect(0, 0, self.width(), self.height()), QColor("#101218"))
+        if not IS_WINDOWS:
+            painter.restore()
 
         overlay = QColor("#0B0D12")
         eff_opacity = self._custom_bg[4] if self._custom_bg is not None else opacity_fraction(self.config)
@@ -1875,6 +2139,8 @@ class MonitorWidget(QtWidgets.QWidget):
             y = self._draw_sparkline(painter, y, self._gpu_history)
             name = snap.get("gpu_name") or ""
             vram = DASH
+            if IS_LINUX and not snap.get("gpu_present", True):
+                vram = "No GPU readings"
             if snap.get("vram_total"):
                 vram = "VRAM %s / %s GB" % (fmt_num(snap.get("vram_used")),
                                             fmt_num(snap.get("vram_total")))
@@ -2292,6 +2558,8 @@ class MonitorWidget(QtWidgets.QWidget):
 
     # -- pinning ------------------------------------------------------------
     def apply_extended_style(self, hwnd):
+        if not IS_WINDOWS:
+            return
         style = get_window_long(hwnd, GWL_EXSTYLE)
         style |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
         if move_mode(self.config):
@@ -2413,9 +2681,11 @@ class MonitorWidget(QtWidgets.QWidget):
             mount = self.disk_at(event.position().x(), event.position().y())
             if mount:
                 self.show_disk_menu(mount)
+            elif IS_LINUX:
+                self.show_card_menu()      # fallback for desktops without a tray
             return
-        if not move_mode(self.config):
-            return
+        if not (move_mode(self.config) or IS_LINUX):
+            return          # Windows locked: the desktop hook delivers clicks
         if event.button() == Qt.LeftButton:
             self._drag_delta = None
             self._press = (event.globalPosition().x(), event.globalPosition().y(),
@@ -2443,8 +2713,23 @@ class MonitorWidget(QtWidgets.QWidget):
                 zone = self.zone_at(press[2], press[3])
                 if zone:
                     self.handle_zone(zone)
+            if IS_LINUX and not move_mode(self.config):
+                return          # locked: a click never moved the card, nothing to save
             self.config["x"], self.config["y"] = self._pos
             save_config(self.config)
+
+    def show_card_menu(self):
+        """Right-click menu on the card (Linux): Settings and Quit, so the app stays
+        usable on a desktop with no system tray."""
+        menu = QtWidgets.QMenu()
+        settings_action = menu.addAction("Settings...")
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        chosen = menu.exec(QtGui.QCursor.pos())
+        if chosen is settings_action:
+            QTimer.singleShot(0, self.open_settings)
+        elif chosen is quit_action:
+            QtWidgets.QApplication.instance().quit()
 
     # -- buttons on the card (tabs, record, open file) -------------------------
     def zone_at(self, x, y):
@@ -2992,8 +3277,67 @@ def autostart_command() -> str:
     return '"%s" "%s"' % (pythonw, os.path.abspath(__file__))
 
 
+def autostart_file_path() -> Path:
+    """Freedesktop autostart entry: $XDG_CONFIG_HOME/autostart/desktopwidgets-desktop.desktop."""
+    return config_home() / "autostart" / AUTOSTART_FILE_NAME
+
+
+def desktop_entry_quote(argument: str) -> str:
+    """Quote one argument for the Exec= line of a .desktop file."""
+    escaped = (argument.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("`", "\\`").replace("$", "\\$"))
+    return '"%s"' % escaped
+
+
+def linux_exec_line() -> str:
+    """Absolute command of the running app: the frozen binary, else interpreter + script."""
+    if getattr(sys, "frozen", False):
+        parts = [sys.executable]
+    else:
+        parts = [sys.executable, os.path.abspath(__file__)]
+    return " ".join(desktop_entry_quote(part) for part in parts)
+
+
+def autostart_entry_text() -> str:
+    """Contents of the autostart .desktop file."""
+    return "\n".join([
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Desktop Monitor",
+        "Comment=Desktop Monitor card (CPU, GPU, RAM, disks)",
+        "Exec=" + linux_exec_line(),
+        "Terminal=false",
+        "X-GNOME-Autostart-enabled=true",
+        "",
+    ])
+
+
+def set_autostart_linux(enabled) -> bool:
+    """Write or remove the Freedesktop autostart entry."""
+    target = autostart_file_path()
+    try:
+        if enabled:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".tmp")
+            tmp.write_text(autostart_entry_text(), encoding="utf-8")
+            os.replace(tmp, target)
+        else:
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+        log_line("autostart %s: %s" % ("enabled" if enabled else "removed", target.name))
+        return True
+    except Exception as exc:
+        log_line("autostart update failed: %s" % exc)
+        return False
+
+
 def set_autostart(enabled):
-    """Write or remove the DesktopWidgets.DesktopMonitor value in the HKCU Run key."""
+    """Write or remove the DesktopWidgets.DesktopMonitor value in the HKCU Run key
+    (Windows) or the autostart .desktop file (Linux)."""
+    if IS_LINUX:
+        return set_autostart_linux(enabled)
     if not IS_WINDOWS or winreg is None:
         log_line("autostart is only supported on Windows")
         return False
@@ -3021,8 +3365,11 @@ def open_status_feed(config):
     """Open the file the user picked as the status feed, if there is one."""
     path = str(config.get("feed_path") or "").strip()
     try:
-        if path and os.path.isfile(path) and IS_WINDOWS:
-            os.startfile(path)
+        if path and os.path.isfile(path):
+            if IS_WINDOWS:
+                os.startfile(path)
+            elif IS_LINUX:
+                subprocess.Popen(["xdg-open", path])
     except Exception as exc:
         log_line("could not open the status feed file: %s" % exc)
 
@@ -3096,7 +3443,8 @@ def build_tray(widget):
     io_action.setChecked(bool(widget.config.get("show_disk_io")))
     io_action.toggled.connect(lambda on: toggle_flag(widget, "show_disk_io", bool(on)))
 
-    start_action = menu.addAction("Start with Windows")
+    start_action = menu.addAction("Start when I sign in" if IS_LINUX
+                                  else "Start with Windows")
     start_action.setCheckable(True)
     start_action.setChecked(bool(widget.config.get("autostart")))
     start_action.toggled.connect(lambda on: set_autostart_flag(widget, bool(on)))
@@ -3116,6 +3464,11 @@ def build_tray(widget):
 def set_move_mode(widget, enabled):
     """Move mode: the card is detached from the wallpaper and draggable."""
     widget.config["locked"] = not bool(enabled)
+    if IS_LINUX:
+        save_config(widget.config)
+        widget.apply_linux_window_flags()
+        widget.update()
+        return
     if enabled:
         widget.unpin_from_desktop()
     else:
@@ -3208,8 +3561,57 @@ def normalise_config(config):
     return config
 
 
+class LinuxInstanceLock:
+    """Holds the flock on the lock file for as long as the app runs."""
+
+    def __init__(self, handle) -> None:
+        self._handle = handle
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is None:
+            return
+        try:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            handle.close()
+        except Exception:
+            pass
+
+
+def lock_file_path() -> Path:
+    """$XDG_RUNTIME_DIR/desktopwidgets-desktop.lock, else the data folder."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+    if runtime and os.path.isdir(runtime):
+        return Path(runtime) / LOCK_FILE_NAME
+    return APP_DIR / LOCK_FILE_NAME
+
+
+def acquire_linux_lock(path=None):
+    """Take the single-instance lock (fcntl.flock). None if another copy holds it."""
+    import fcntl
+    target = Path(path) if path is not None else lock_file_path()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(target, "a+")
+    except OSError as exc:
+        log_line("lock file %s could not be opened: %s" % (target.name, exc))
+        return LinuxInstanceLock(None)        # cannot lock: run anyway
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return LinuxInstanceLock(handle)
+
+
 def acquire_singleton():
-    """Return a QLocalServer if this is the only instance, else None."""
+    """Return a lock/server object if this is the only instance, else None."""
+    if IS_LINUX:
+        return acquire_linux_lock()
     name = SINGLE_INSTANCE_NAME
     socket_client = QLocalSocket()
     socket_client.connectToServer(name)
@@ -3237,6 +3639,7 @@ def run_selftest():
                               os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
     setup_logging()
     print("config: %s" % CONFIG_PATH)
+    print("machine: %s" % (platform.node() or socket.gethostname()))
     if IS_WINDOWS:
         progman = user32.FindWindowW("Progman", None)
         workerw = find_workerw()
@@ -3333,6 +3736,9 @@ def main():
 
     widget.show()
     widget.pin_to_desktop()
+    if "--settings" in sys.argv:
+        # Desktops without a tray: open Settings straight away.
+        QTimer.singleShot(400, widget.open_settings)
 
     tray = build_tray(widget)
     drag_hook = DesktopDragHook(widget) if IS_WINDOWS else None

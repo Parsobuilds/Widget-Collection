@@ -16,6 +16,7 @@ from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="um_ui_test_")
 os.environ["APPDATA"] = _TMP
+os.environ["XDG_CONFIG_HOME"] = _TMP
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -47,6 +48,7 @@ class TestPaths(unittest.TestCase):
         self.assertEqual(usage_monitor.STATE_PATH.name, "widget_state.json")
         self.assertNotEqual(usage_monitor.STATE_PATH, provider_config.config_path())
 
+    @unittest.skipUnless(sys.platform == "win32", "the legacy background file is Windows only")
     def test_background_prefers_new_file_and_falls_back_to_legacy(self) -> None:
         self.assertEqual(usage_monitor.background_config_path(), usage_monitor.BG_CONFIG_PATH)
         legacy = usage_monitor.LEGACY_BG_CONFIG_PATH
@@ -61,11 +63,92 @@ class TestPaths(unittest.TestCase):
             legacy.unlink(missing_ok=True)
             usage_monitor.BG_CONFIG_PATH.unlink(missing_ok=True)
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows exe path")
     def test_autostart_command_frozen_uses_exe(self) -> None:
         with mock.patch.object(sys, "frozen", True, create=True), \
                 mock.patch.object(sys, "executable", r"X:\Apps\UsageMonitor.exe"):
             self.assertEqual(usage_monitor.autostart_command(), '"X:\\Apps\\UsageMonitor.exe"')
         self.assertEqual(usage_monitor.RUN_VALUE_NAME, "DesktopWidgets.UsageMonitor")
+
+    def test_background_file_has_no_legacy_fallback_on_linux(self) -> None:
+        with mock.patch.object(usage_monitor, "IS_WINDOWS", False):
+            legacy = usage_monitor.LEGACY_BG_CONFIG_PATH
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("{}", encoding="utf-8")
+            try:
+                self.assertEqual(usage_monitor.background_config_path(), usage_monitor.BG_CONFIG_PATH)
+            finally:
+                legacy.unlink(missing_ok=True)
+
+
+class TestLinuxAutostartAndLock(unittest.TestCase):
+    """The Linux autostart file, single-instance lock and menu label (run on any OS)."""
+
+    def setUp(self) -> None:
+        self.addCleanup(usage_monitor.linux_autostart_path().unlink, missing_ok=True)
+
+    def test_file_and_label_names(self) -> None:
+        self.assertEqual(usage_monitor.AUTOSTART_FILE_NAME, "desktopwidgets-usage.desktop")
+        self.assertEqual(usage_monitor.LOCK_FILE_NAME, "desktopwidgets-usage.lock")
+        with mock.patch.object(usage_monitor, "IS_WINDOWS", False):
+            self.assertEqual(
+                usage_monitor.linux_autostart_path(),
+                Path(_TMP) / "autostart" / "desktopwidgets-usage.desktop",
+            )
+
+    def test_autostart_label_matches_platform(self) -> None:
+        expected = "Start with Windows" if sys.platform == "win32" else "Start when I sign in"
+        self.assertEqual(usage_monitor.AUTOSTART_LABEL, expected)
+
+    def test_enable_and_disable_writes_a_desktop_file(self) -> None:
+        path = usage_monitor.linux_autostart_path()
+        self.assertFalse(usage_monitor.linux_autostart_enabled())
+        self.assertTrue(usage_monitor.set_linux_autostart(True))
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("[Desktop Entry]", text)
+        self.assertIn("Type=Application", text)
+        self.assertIn("Exec=", text)
+        self.assertIn("Terminal=false", text)
+        self.assertTrue(usage_monitor.linux_autostart_enabled())
+        self.assertTrue(usage_monitor.set_linux_autostart(False))
+        self.assertFalse(path.exists())
+        self.assertFalse(usage_monitor.linux_autostart_enabled())
+
+    def test_file_switched_off_inside_counts_as_disabled(self) -> None:
+        path = usage_monitor.linux_autostart_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[Desktop Entry]\nType=Application\nExec=x\nHidden=true\n", encoding="utf-8")
+        self.assertFalse(usage_monitor.linux_autostart_enabled())
+
+    def test_exec_quote(self) -> None:
+        self.assertEqual(usage_monitor.desktop_exec_quote("python3"), "python3")
+        self.assertEqual(usage_monitor.desktop_exec_quote("100%"), "100%%")
+        quoted = usage_monitor.desktop_exec_quote("/opt/my app/run.py")
+        self.assertTrue(quoted.startswith('"') and quoted.endswith('"'))
+        self.assertIn("my app", quoted)
+
+    def test_linux_command_uses_launcher_when_installed(self) -> None:
+        with mock.patch.object(usage_monitor, "IS_WINDOWS", False), \
+                mock.patch.object(usage_monitor.shutil, "which", return_value="/usr/bin/desktopwidgets-usage"):
+            self.assertEqual(usage_monitor.autostart_command(), "/usr/bin/desktopwidgets-usage")
+
+    def test_lock_path_prefers_runtime_dir(self) -> None:
+        runtime = tempfile.mkdtemp(prefix="um_runtime_")
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime}):
+            self.assertEqual(usage_monitor.lock_file_path(), Path(runtime) / "desktopwidgets-usage.lock")
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": ""}):
+            self.assertEqual(usage_monitor.lock_file_path(), provider_config.data_dir() / "desktopwidgets-usage.lock")
+
+    @unittest.skipIf(sys.platform == "win32", "fcntl locks are Linux/macOS only")
+    def test_second_lock_is_refused_until_the_first_is_released(self) -> None:
+        lock_path = Path(tempfile.mkdtemp(prefix="um_lock_")) / "test.lock"
+        first = usage_monitor.acquire_instance_lock(lock_path)
+        self.assertIsNotNone(first)
+        self.assertIsNone(usage_monitor.acquire_instance_lock(lock_path))
+        first.close()
+        again = usage_monitor.acquire_instance_lock(lock_path)
+        self.assertIsNotNone(again)
+        again.close()
 
 
 class TestCollect(unittest.TestCase):

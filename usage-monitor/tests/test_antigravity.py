@@ -15,7 +15,7 @@ from fakes import FakeHttp, KeyringMixin, TempProfile, http_error, instance  # n
 
 from providers import antigravity, registry  # noqa: E402
 from providers.antigravity import AntigravityKind, parse_payload, read_token_file  # noqa: E402
-from providers.base import ProviderError  # noqa: E402
+from providers.base import ProviderError, profile_text  # noqa: E402
 
 TOKEN_FILE = {
     "client_id": "fake-client-id.example",
@@ -67,7 +67,7 @@ class TokenFileTests(KeyringMixin, unittest.TestCase):
             profile.write_json(TOKEN_PATH, TOKEN_FILE)
             result = AntigravityKind().detect()
         self.assertTrue(result.found)
-        self.assertTrue(result.path.startswith("%USERPROFILE%\\.t3\\"))
+        self.assertTrue(result.path.startswith(profile_text(".t3", "")))
         self.assertNotIn("fake-refresh", repr(result))
 
     def test_detect_not_found_says_so(self) -> None:

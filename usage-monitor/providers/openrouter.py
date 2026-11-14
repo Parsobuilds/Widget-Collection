@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from models import UsageRow, format_reset_countdown
 from providers.base import (
+    SECRET_STORE_HELP,
     FieldSpec,
     ProviderError,
     ProviderKind,
@@ -119,7 +120,7 @@ class OpenRouterKind(ProviderKind):
     description = "Needs an OpenRouter API key (openrouter.ai, Keys) to show its credit limit and spend."
     stability = "official"
     docs_url = "https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key"
-    fields = [FieldSpec(key="api_key", label="API key", kind="secret", help="Saved in Windows Credential Manager.")]
+    fields = [FieldSpec(key="api_key", label="API key", kind="secret", help=SECRET_STORE_HELP)]
     min_poll_seconds = 300
 
     def fetch(self, instance: "ProviderInstance", secret: str | None) -> list[UsageRow]:

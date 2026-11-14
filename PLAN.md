@@ -131,3 +131,48 @@ this work started (snapshot taken 2026-11-14) and are left untouched.
   Tests: 89 To-Do + 190 Usage Monitor + 55 Desktop Monitor = 334 OK. All 4 frozen `--selftest`
   checks passed. Automated Checks 1-8 and 10-11 passed; Check 9 automated parts passed (live
   UAC install/uninstall of `monitor\cputemp` left for interactive approval).
+
+# Linux port (branch `linux-port`)
+
+Spec: [`docs/LINUX_PORT.md`](docs/LINUX_PORT.md). Briefs: `docs/briefs/<chunk>.md` (shared 13-line header).
+
+## Linux decisions (made on the owner's behalf)
+
+L1. **Linux names** (component keys `todo`/`usage`/`desktop`, launchers `desktopwidgets-<key>`, menu/autostart
+    `desktopwidgets-<key>.desktop`, lock `desktopwidgets-<key>.lock`) fixed in `docs/LINUX_PORT.md` before wave 1.
+L2. **Python 3.12 on the test machine via `uv`** (standalone uv 0.9.9 under the test folder; CPython 3.12.12), because
+    the system Python is 3.14 and the build pins PySide6 6.12.0.
+L3. **Screenshots on GNOME Wayland over ssh** use the xdg-desktop-portal Screenshot call with `interactive=false`, after
+    granting the portal's `screenshot` permission to unsandboxed callers in the session permission store (revoked at
+    the end). `gnome-screenshot` and the Shell D-Bus API are refused on GNOME 50.
+L4. **Keyring over ssh**: the logged-in session's gnome-keyring is unlocked; ssh commands reach it by setting
+    `DBUS_SESSION_BUS_ADDRESS` to the session bus. A set/get/delete probe with a fake value worked.
+L5. **Live model list differs from the shared model list kept outside this repository** (new `claudeAgent_minimax` provider; Antigravity now lists only
+    Gemini models). Not edited, because that folder is read-only for this job; recorded here instead.
+L6. **windows-ci never installs on the owner's PC**; the real install/uninstall proof runs only on the CI runner.
+
+## Linux chunks
+
+### Wave 1 (parallel, disjoint files)
+- [ ] test-vms (Codex gpt-6.1-sol failed: ChatGPT usage limit -> re-dispatched to Claude Sonnet 5.5, high) - `~/dw_test/vm/` on the test machine only
+- [x] todo-linux (Claude Sonnet 5.5, medium) - `todo-widget/app/`
+- [ ] usage-linux (Claude Sonnet 5.5, high) - `usage-monitor/`
+- [x] desktop-linux (Claude Sonnet 5.5, medium) - `desktop-monitor/`
+- [x] windows-ci (Codex gpt-6.1-sol failed: ChatGPT usage limit -> Antigravity gemini-4-argon failed: quota -> re-dispatched to Claude Sonnet 5.5, medium) - `installer/ci/`, `.github/workflows/build-installer.yml`
+### Wave 2
+- [ ] packaging-linux (Codex out of allowance; Antigravity out of quota; planned: Claude Sonnet 5.5 medium) - `build.py`, `installer/linux/`, `requirements-build-linux.txt`, `.github/workflows/build-linux.yml`
+### Wave 3
+- [ ] docs (Antigravity gemini-3.8-flash, low) - README Linux section draft; orchestrator merges, sweeps, builds, CI
+### Wave 4
+- [ ] final-review (Claude Opus 5.5, high, read-only) - Linux secret storage/logging; install.sh/uninstall.sh
+
+## Linux status log
+- 2026-11-14 14:30: scouting done; test-machine venv, shot.py, libsecret-tools/gnome-screenshot/grim installed; briefs written.
+- 2026-11-14 14:26: windows-ci landed (9 unit tests OK), committed c8a8a80, pushed linux-port; CI run 43604824642 started.
+- 2026-11-14 14:40: todo-linux landed (Windows 100 OK/1 skip, Linux 100 OK; cards checked). Orchestrator fix: LEGACY_BG_CONFIG_PATH back on one line for the sweep allowance. Sweep 0 hits.
+- 2026-11-14 14:45: CI run 43604824642 (linux-port @ c8a8a80) green: build + verify-install (7 PASS lines, RESULT: PASS),
+  signing skipped, artifacts DesktopWidgets-Setup (52,701,212 B) + selftest-cards. Finding F1: on the clean runner the
+  Usage Monitor card renders tofu boxes (offscreen font DB has no "Segoe UI"; it asks for the family without checking,
+  Desktop Monitor checks and falls back). Fix in usage_monitor.py after usage-linux lands (family check + fallback),
+  then re-run CI.
+- 2026-11-14 14:50: desktop-linux landed (Windows 93 OK/3 skip, Linux 70 OK/2 skip; card vs top/free/nvidia-smi: CPU 3.8 vs 5.1 % (sampling window), RAM 3.35 GB vs 3392 MiB, GPU 0 %/44 C/278 vs 279 MiB). NVML v2 memory struct used on Linux only. Sweep 0 hits.

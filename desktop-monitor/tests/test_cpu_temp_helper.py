@@ -8,6 +8,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+if not sys.platform.startswith("win"):
+    # The CPU temperature helper is Windows-only and is never imported on Linux.
+    raise unittest.SkipTest("cpu_temp_helper is Windows-only")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cpu_temp_helper as helper  # noqa: E402
 

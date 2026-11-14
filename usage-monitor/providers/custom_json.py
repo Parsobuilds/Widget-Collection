@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from models import UsageRow
 from providers.base import (
+    SECRET_STORE_HELP,
     FieldSpec,
     ProviderError,
     ProviderKind,
@@ -138,7 +139,7 @@ class CustomJsonKind(ProviderKind):
                   help="https:// only (http:// is allowed for localhost)."),
         FieldSpec(key="method", label="Method", kind="choice", required=False, default="GET", choices=["GET", "POST"]),
         FieldSpec(key="api_key", label="API key", kind="secret", required=False,
-                  help="Optional. Saved in Windows Credential Manager."),
+                  help="Optional. " + SECRET_STORE_HELP),
         FieldSpec(key="key_header", label="Key header", required=False, default="Authorization",
                   help="Header that carries the key, e.g. Authorization or x-api-key."),
         FieldSpec(key="key_prefix", label="Key prefix", required=False, default="Bearer ",

@@ -29,6 +29,7 @@ from providers.base import (
     home_dir,
     http_json,
     make_row,
+    profile_text,
     read_json_file,
     slug,
     to_number,
@@ -38,7 +39,8 @@ if TYPE_CHECKING:
     from provider_config import ProviderInstance
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-DEFAULT_CREDENTIALS = "%USERPROFILE%\\.claude\\.credentials.json"
+# Shown in the Settings form: a %USERPROFILE% path on Windows, ~/... on Linux.
+DEFAULT_CREDENTIALS = profile_text(".claude", ".credentials.json")
 
 # Fallback rows when the reply has no ``limits`` list: (key, label).
 _FALLBACK_WINDOWS = (("five_hour", "5-hour session"), ("seven_day", "7-day, all models"))

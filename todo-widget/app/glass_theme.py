@@ -79,7 +79,8 @@ PILL_H = 20             # height of one pill in that row
 BUTTON_H = 26           # taller pills used as buttons
 PILL_PAD = 20           # a pill is this much wider than its text
 
-FONT_FAMILIES = ["Segoe UI Variable", "Segoe UI"]
+# Windows uses the Segoe UI family. On Linux the list is empty, which keeps Qt's default sans font.
+FONT_FAMILIES = ["Segoe UI Variable", "Segoe UI"] if sys.platform == "win32" else []
 
 # (pen width, alpha) for each glow outline, widest and faintest first.
 GLOW_STROKES = ((11.0, 12), (8.0, 22), (5.5, 40), (3.5, 70), (2.0, 110))
@@ -104,13 +105,43 @@ STYLE_STRETCH = 2
 def qt_font(size_pt: int, bold: bool = False, letter_spacing: float = 0.0, strike_out: bool = False) -> QFont:
     """Builds the widget font (Segoe UI Variable) at a point size."""
     font = QFont()
-    font.setFamilies(FONT_FAMILIES)
+    if FONT_FAMILIES:
+        font.setFamilies(FONT_FAMILIES)
     font.setPointSize(size_pt)
     font.setBold(bold)
     font.setStrikeOut(strike_out)
     if letter_spacing:
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, letter_spacing)
     return font
+
+
+def draw_cross(painter: QPainter, centre: QPointF, size: float, colour: QColor) -> None:
+    """Paints an X from two lines, so no font has to contain a cross glyph (used on Linux)."""
+    half = size / 4.0
+    pen = QPen(colour, 1.6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.save()
+    painter.setPen(pen)
+    painter.drawLine(QPointF(centre.x() - half, centre.y() - half), QPointF(centre.x() + half, centre.y() + half))
+    painter.drawLine(QPointF(centre.x() - half, centre.y() + half), QPointF(centre.x() + half, centre.y() - half))
+    painter.restore()
+
+
+def draw_check(painter: QPainter, centre: QPointF, size: float, colour: QColor) -> None:
+    """Paints a tick mark from a path, so no font has to contain a check glyph (used on Linux)."""
+    unit = size / 10.0
+    path = QPainterPath()
+    path.moveTo(centre.x() - 3.0 * unit, centre.y() + 0.2 * unit)
+    path.lineTo(centre.x() - 0.8 * unit, centre.y() + 2.6 * unit)
+    path.lineTo(centre.x() + 3.4 * unit, centre.y() - 2.6 * unit)
+    pen = QPen(colour, 1.8)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.save()
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(path)
+    painter.restore()
 
 
 def label_font() -> QFont:
@@ -303,7 +334,10 @@ def opacity_fraction(raw: object, default: float = DEFAULT_TINT_OPACITY) -> floa
 WIDGET_BG_CONFIG_PATH = paths.widget_background_file()
 # Older builds kept the same file in a different folder. It is only ever READ, and only when
 # the new file does not exist yet; every save goes to WIDGET_BG_CONFIG_PATH.
-LEGACY_BG_CONFIG_PATH = os.path.join(paths.appdata_dir(), "TomTodoList", "widget_background.json")
+# Linux has no legacy location, so the fallback is switched off there.
+LEGACY_BG_CONFIG_PATH: Optional[str] = os.path.join(paths.appdata_dir(), "TomTodoList", "widget_background.json")
+if paths.is_linux():
+    LEGACY_BG_CONFIG_PATH = None
 
 DEFAULT_BG_CONFIG = {
     "image_path": "",          # Empty or missing = fall back to Windows desktop wallpaper

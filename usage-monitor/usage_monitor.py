@@ -1,13 +1,17 @@
-"""usage_monitor.py: AI usage and credits desktop widget for Windows.
+"""usage_monitor.py: AI usage and credits desktop widget for Windows and Linux.
 
 What it does
 ------------
 A compact, dark, frosted-glass desktop card pinned above the wallpaper (WorkerW)
 and below normal windows, matching Desktop Monitor and the To-Do Widget. It shows
 usage limits (progress bar, percent used, time until reset) and credit balances
-for the providers the user adds in the Settings window (tray menu "Settings..."
-or the gear on the card). A first run has no providers and shows an
-"Add a provider" button.
+for the providers the user adds in the Settings window (tray menu "Settings...",
+right-click menu on Linux, or the gear on the card). A first run has no
+providers and shows an "Add a provider" button.
+
+On Linux the card is a normal frameless window (no WorkerW pinning), the tray
+icon is optional (GNOME may not have one: the gear and the right-click menu
+still work) and "Start when I sign in" writes an autostart ``.desktop`` file.
 
 Tabs
 ----
@@ -20,17 +24,18 @@ Run
     python usage_monitor.py             # normal launch
     pythonw usage_monitor.py            # background launch without console
     python usage_monitor.py --selftest  # fetch rows, print table, save PNG
+    python usage_monitor.py --settings  # launch and open the Settings window
 """
 
 from __future__ import annotations
 
 import ctypes
-import ctypes.wintypes
 import datetime
 import io
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -53,9 +58,15 @@ except ImportError:
     ImageDraw = None
     ImageFilter = None
 
-try:
-    import winreg
-except ImportError:
+# Windows-only modules: imported only on Windows so Linux never touches them.
+if sys.platform == "win32":
+    import ctypes.wintypes
+
+    try:
+        import winreg
+    except ImportError:
+        winreg = None
+else:
     winreg = None
 
 # Make the flat local imports (cache, models, providers...) work from any folder.
@@ -110,17 +121,20 @@ GAP = 8
 
 SINGLE_INSTANCE_KEY = "DesktopWidgets.UsageMonitor"
 RUN_VALUE_NAME = "DesktopWidgets.UsageMonitor"
+# Linux names (see docs/LINUX_PORT.md): autostart entry and single-instance lock.
+AUTOSTART_FILE_NAME = "desktopwidgets-usage.desktop"
+LOCK_FILE_NAME = "desktopwidgets-usage.lock"
+LAUNCHER_NAME = "desktopwidgets-usage"
 LOG_MAX_BYTES = 512 * 1024
 
 
 def appdata_root() -> Path:
-    """Return %APPDATA% (or the usual Roaming folder when the variable is missing)."""
-    value = os.environ.get("APPDATA")
-    return Path(value) if value else Path.home() / "AppData" / "Roaming"
+    """Folder that holds ``DesktopWidgets``: %APPDATA% on Windows, $XDG_CONFIG_HOME on Linux."""
+    return provider_config.config_root()
 
 
 def app_dir() -> Path:
-    """Return %APPDATA%\\DesktopWidgets\\UsageMonitor, creating it on demand."""
+    """Return <config root>/DesktopWidgets/UsageMonitor, creating it on demand."""
     return provider_config.data_dir()
 
 
@@ -135,7 +149,12 @@ LEGACY_BG_CONFIG_PATH = appdata_root() / "TomTodoList" / "widget_background.json
 
 
 def background_config_path() -> Path:
-    """The shared background file, or the legacy one when only that exists."""
+    """The shared background file (Windows: or the legacy one when only that exists).
+
+    Linux has no legacy file, so it only ever uses ``widget_background.json``.
+    """
+    if not IS_WINDOWS:
+        return BG_CONFIG_PATH
     if BG_CONFIG_PATH.is_file() or not LEGACY_BG_CONFIG_PATH.is_file():
         return BG_CONFIG_PATH
     return LEGACY_BG_CONFIG_PATH
@@ -168,14 +187,49 @@ def bar_color(percent_used: float | None) -> QColor:
     return QColor(C_RED)
 
 
+def font_family_available(family: str) -> bool:
+    """True when Qt can really find ``family`` (a clean machine or the offscreen
+    platform may lack it; asking for a missing family can draw empty boxes)."""
+    from PySide6.QtGui import QFontDatabase
+
+    return family in QFontDatabase.families()
+
+
 def qt_font(size_pt: int, bold: bool = False, letter_spacing: float = 0.0) -> QFont:
-    """Return Segoe UI font matching Desktop Monitor and To-Do List."""
-    font = QFont("Segoe UI")
+    """Return Segoe UI on Windows when installed (matches the other widgets), else the system font."""
+    font = QFont("Segoe UI") if IS_WINDOWS and font_family_available("Segoe UI") else QFont()
     font.setPointSize(size_pt)
     font.setBold(bold)
     if letter_spacing:
         font.setLetterSpacing(QFont.AbsoluteSpacing, letter_spacing)
     return font
+
+
+def draw_gear_icon(painter: QPainter, center: QPointF, radius: float, color: QColor) -> None:
+    """Paint a small settings gear (a ring with eight teeth) centred on ``center``.
+
+    Used where there is no icon font (Linux). It is a painted path, so it looks
+    the same on every computer.
+    """
+    body = QPainterPath()
+    body.addEllipse(QPointF(0.0, 0.0), radius * 0.72, radius * 0.72)
+    tooth_w = radius * 0.4
+    for index in range(8):
+        tooth = QPainterPath()
+        tooth.addRoundedRect(QRectF(-tooth_w / 2, -radius, tooth_w, radius * 0.55), 0.6, 0.6)
+        turn = QtGui.QTransform()
+        turn.rotate(index * 45.0)
+        body = body.united(turn.map(tooth))
+    hole = QPainterPath()
+    hole.addEllipse(QPointF(0.0, 0.0), radius * 0.3, radius * 0.3)
+    gear = body.subtracted(hole)
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    painter.translate(center)
+    painter.drawPath(gear)
+    painter.restore()
 
 
 # ---------------------------------------------------------------- configuration
@@ -768,6 +822,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         self._grab = None
         self._resizing = False
         self._pending_resize = None
+        # Menu shown on right-click (set by main(); used on Linux, where there may be no tray).
+        self.context_menu: QtWidgets.QMenu | None = None
 
         self._resize_timer = QTimer(self)
         self._resize_timer.setInterval(16)
@@ -1094,6 +1150,12 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 self.config["x"], self.config["y"] = self._pos
                 save_config(self.config)
 
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        """Right-click on the card shows the same menu as the tray icon (Linux only)."""
+        if not IS_WINDOWS and self.context_menu is not None:
+            self.context_menu.popup(event.globalPos())
+            event.accept()
+
     def zone_at(self, x: float, y: float) -> str | None:
         pt = QPointF(x, y)
         for rect, name in self._zones:
@@ -1399,11 +1461,16 @@ class UsageMonitorWidget(QtWidgets.QWidget):
 
         # Gear (opens Settings) at the far right, then the clickable refresh time
         # "Settings" glyph from the Windows icon font (monochrome, unlike the emoji gear)
-        gear_font = QFont("Segoe MDL2 Assets")
-        gear_font.setPixelSize(13)
-        gear_w = self._text(
-            painter, right, y + 14, "\ue713", gear_font, C_LABEL, align_right=True
-        )
+        if IS_WINDOWS and font_family_available("Segoe MDL2 Assets"):
+            gear_font = QFont("Segoe MDL2 Assets")
+            gear_font.setPixelSize(13)
+            gear_w = self._text(
+                painter, right, y + 14, "\ue713", gear_font, C_LABEL, align_right=True
+            )
+        else:
+            # No Segoe icon font (Linux, or a machine without it): paint the gear as a shape.
+            gear_w = 13.0
+            draw_gear_icon(painter, QPointF(right - gear_w / 2, y + 8.0), 6.5, QColor(C_LABEL))
         self._zones.append((QRectF(right - gear_w - 4, y - 1, gear_w + 8, HEADER_H + 2), "settings"))
         stamp_right = right - gear_w - 10
         stamp_text = f"↻ {self._last_refresh_str}"
@@ -1959,19 +2026,97 @@ def make_tray_icon() -> QPixmap:
     return QPixmap.fromImage(img)
 
 
+# ---------------------------------------------------------------- autostart (sign-in)
+def desktop_exec_quote(argument: str) -> str:
+    """Quote one command-line argument for the ``Exec=`` line of a .desktop file.
+
+    Plain words are left alone. Anything with a space or a special character is
+    put in double quotes with the characters the Desktop Entry rules name
+    escaped, and ``%`` doubled (``%`` starts a field code in an Exec line).
+    """
+    argument = argument.replace("%", "%%")
+    if argument and not any(ch in argument for ch in " \t\n\"'\\><~|&;$*?#()`"):
+        return argument
+    for special in ("\\", '"', "`", "$"):
+        argument = argument.replace(special, "\\" + special)
+    # The Exec value is itself a string value, so backslashes are doubled once more.
+    argument = argument.replace("\\", "\\\\")
+    return f'"{argument}"'
+
+
 def autostart_command() -> str:
-    """The command Windows runs at sign-in: the exe when frozen, else pythonw + script."""
+    """The command run at sign-in.
+
+    Windows: the exe when frozen, else pythonw + script. Linux: the
+    ``desktopwidgets-usage`` launcher when it is installed, the frozen binary,
+    or this Python plus this script.
+    """
+    if IS_WINDOWS:
+        if getattr(sys, "frozen", False):
+            return f'"{sys.executable}"'
+        pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if not os.path.exists(pythonw):
+            pythonw = sys.executable
+        return f'"{pythonw}" "{os.path.abspath(__file__)}"'
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
-    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    if not os.path.exists(pythonw):
-        pythonw = sys.executable
-    return f'"{pythonw}" "{os.path.abspath(__file__)}"'
+        return desktop_exec_quote(sys.executable)
+    launcher = shutil.which(LAUNCHER_NAME)
+    if launcher:
+        return desktop_exec_quote(launcher)
+    return f"{desktop_exec_quote(sys.executable)} {desktop_exec_quote(os.path.abspath(__file__))}"
+
+
+def linux_autostart_path() -> Path:
+    """``$XDG_CONFIG_HOME/autostart/desktopwidgets-usage.desktop``."""
+    return provider_config.config_root() / "autostart" / AUTOSTART_FILE_NAME
+
+
+def linux_autostart_text() -> str:
+    """The text of the autostart ``.desktop`` file (no secrets, no personal data)."""
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Usage Monitor\n"
+        "Comment=AI usage and credits desktop widget\n"
+        f"Exec={autostart_command()}\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+
+
+def linux_autostart_enabled() -> bool:
+    """True when the autostart file exists and is not switched off inside."""
+    path = linux_autostart_path()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lowered = text.lower().replace(" ", "")
+    return "hidden=true" not in lowered and "x-gnome-autostart-enabled=false" not in lowered
+
+
+def set_linux_autostart(enabled: bool) -> bool:
+    """Write or delete the autostart file. Returns True on success."""
+    path = linux_autostart_path()
+    try:
+        if enabled:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(linux_autostart_text(), encoding="utf-8")
+            os.replace(tmp, path)
+        else:
+            path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        log_line(f"autostart update failed: {type(exc).__name__}")
+        return False
 
 
 def autostart_enabled() -> bool:
-    """True when the HKCU Run value exists (the installer may have written it)."""
-    if not IS_WINDOWS or winreg is None:
+    """True when the widget starts at sign-in (HKCU Run value, or the Linux .desktop file)."""
+    if not IS_WINDOWS:
+        return linux_autostart_enabled()
+    if winreg is None:
         return False
     try:
         with winreg.OpenKey(
@@ -1984,8 +2129,10 @@ def autostart_enabled() -> bool:
 
 
 def set_autostart(enabled: bool) -> bool:
-    """Write or remove the DesktopWidgets.UsageMonitor value in HKCU\\...\\Run."""
-    if not IS_WINDOWS or winreg is None:
+    """Turn "start at sign-in" on or off (HKCU Run value, or the Linux .desktop file)."""
+    if not IS_WINDOWS:
+        return set_linux_autostart(enabled)
+    if winreg is None:
         return False
     try:
         key = winreg.OpenKey(
@@ -2024,15 +2171,19 @@ def show_settings(widget: "UsageMonitorWidget", worker: "CollectorWorker"):
     return window
 
 
-def build_tray(
-    app: QtWidgets.QApplication,
+AUTOSTART_LABEL = "Start with Windows" if IS_WINDOWS else "Start when I sign in"
+
+
+def build_menu(
     widget: UsageMonitorWidget,
     worker: CollectorWorker,
     stop_callback: Callable[[], None],
-) -> QSystemTrayIcon:
-    """Build the tray icon: Settings / Move / Lock / Refresh / Opacity / Start with Windows / Quit."""
-    tray = QSystemTrayIcon(make_tray_icon(), app)
-    tray.setToolTip("Usage Monitor")
+) -> QtWidgets.QMenu:
+    """Build the menu: Settings / Move / Lock / Refresh / Opacity / autostart / Quit.
+
+    The tray icon shows it, and on Linux a right-click on the card shows it too
+    (some desktops have no tray).
+    """
     menu = QtWidgets.QMenu()
 
     settings_action = menu.addAction("Settings...")
@@ -2090,7 +2241,7 @@ def build_tray(
         opacity_group.addAction(act)
 
     menu.addSeparator()
-    autostart_action = menu.addAction("Start with Windows")
+    autostart_action = menu.addAction(AUTOSTART_LABEL)
     autostart_action.setCheckable(True)
     autostart_action.setChecked(autostart_enabled())
 
@@ -2098,14 +2249,29 @@ def build_tray(
         if set_autostart(checked):
             widget.config["autostart"] = checked
             save_config(widget.config)
+        autostart_action.setChecked(autostart_enabled())
 
     autostart_action.triggered.connect(_toggle_autostart)
 
     menu.addSeparator()
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(stop_callback)
+    return menu
 
+
+def build_tray(
+    app: QtWidgets.QApplication,
+    widget: UsageMonitorWidget,
+    worker: CollectorWorker,
+    stop_callback: Callable[[], None],
+    menu: QtWidgets.QMenu | None = None,
+) -> QSystemTrayIcon:
+    """Build the tray icon and give it the menu from ``build_menu``."""
+    tray = QSystemTrayIcon(make_tray_icon(), app)
+    tray.setToolTip("Usage Monitor")
+    menu = menu or build_menu(widget, worker, stop_callback)
     tray.setContextMenu(menu)
+    tray._menu = menu  # the tray does not own the menu: keep it alive
     tray.show()
     return tray
 
@@ -2146,8 +2312,44 @@ def run_selftest() -> int:
     return 0
 
 
-def ensure_single_instance() -> QLocalServer | None:
-    """Ensure only one instance of Usage Monitor runs at a time."""
+def lock_file_path() -> Path:
+    """``$XDG_RUNTIME_DIR/desktopwidgets-usage.lock`` (the config folder when there is no runtime dir)."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if runtime and os.path.isabs(runtime) and os.path.isdir(runtime):
+        return Path(runtime) / LOCK_FILE_NAME
+    return provider_config.data_dir() / LOCK_FILE_NAME
+
+
+def acquire_instance_lock(path: Path | None = None):
+    """Take the Linux single-instance lock. Returns the open file, or None if another copy holds it.
+
+    The lock lasts as long as the returned file stays open, and the system
+    drops it by itself if the app crashes, so there is never a stale lock.
+    """
+    import fcntl  # Linux/macOS only, so it is imported here and never on Windows
+
+    target = Path(path) if path is not None else lock_file_path()
+    handle = open(target, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def ensure_single_instance():
+    """Ensure only one instance of Usage Monitor runs at a time.
+
+    Windows: a local socket server. Linux: an ``flock`` lock file. Returns an
+    object that must be kept alive for the whole run, or None for a duplicate.
+    """
+    if not IS_WINDOWS:
+        try:
+            return acquire_instance_lock()
+        except OSError as exc:
+            log_line(f"single-instance lock failed: {type(exc).__name__}")
+            return None
     probe = QLocalSocket()
     probe.connectToServer(SINGLE_INSTANCE_KEY)
     if probe.waitForConnected(250):
@@ -2194,16 +2396,17 @@ def main() -> int:
     widget = UsageMonitorWidget(config, initial_rows=[])
     widget.show()
 
-    if not move_mode(config):
-        QTimer.singleShot(150, widget.pin_to_desktop)
-
     repin_timer = QTimer()
-    repin_timer.setInterval(5000)
-    repin_timer.timeout.connect(widget.repin_if_needed)
-    repin_timer.start()
-
-    drag_hook = DesktopDragHook(widget)
-    drag_hook.start()
+    drag_hook = None
+    if IS_WINDOWS:
+        # Desktop pinning and the click-through mouse hook only exist on Windows.
+        if not move_mode(config):
+            QTimer.singleShot(150, widget.pin_to_desktop)
+        repin_timer.setInterval(5000)
+        repin_timer.timeout.connect(widget.repin_if_needed)
+        repin_timer.start()
+        drag_hook = DesktopDragHook(widget)
+        drag_hook.start()
 
     thread = QThread()
     worker = CollectorWorker(interval_ms=300_000)
@@ -2214,21 +2417,34 @@ def main() -> int:
     widget.settings_requested.connect(lambda: show_settings(widget, worker))
     thread.start()
 
+    tray = None
+
     def shutdown() -> None:
-        drag_hook.stop()
+        if drag_hook is not None:
+            drag_hook.stop()
         repin_timer.stop()
         QtCore.QMetaObject.invokeMethod(
             worker, "stop", Qt.BlockingQueuedConnection
         )
         thread.quit()
         thread.wait(2000)
-        tray.hide()
+        if tray is not None:
+            tray.hide()
         widget.close()
         app.quit()
 
-    tray = build_tray(app, widget, worker, shutdown)
+    menu = build_menu(widget, worker, shutdown)
+    widget.context_menu = menu  # right-click on the card (used on Linux)
+    if IS_WINDOWS or QSystemTrayIcon.isSystemTrayAvailable():
+        tray = build_tray(app, widget, worker, shutdown, menu)
+    else:
+        # GNOME on Wayland has no tray by default: the gear and right-click menu still work.
+        log_line("No system tray on this desktop; use the gear or right-click the card.")
     app._instance_server = instance_server  # keep reference alive
     app._tray = tray
+    app._menu = menu
+    if "--settings" in sys.argv:
+        QTimer.singleShot(200, lambda: show_settings(widget, worker))
     log_line(f"Usage Monitor started at {widget._pos} ({widget._w}x{widget._height})")
     return app.exec()
 

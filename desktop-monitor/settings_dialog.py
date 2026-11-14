@@ -25,7 +25,11 @@ def pictures_dir() -> str:
 
 
 def _norm(mount: str) -> str:
-    return str(mount or "").upper().rstrip("\\/")
+    """Comparable mount point: "c:\\" -> "C:" on Windows, "/home/" -> "/home" on Linux."""
+    text = str(mount or "")
+    if text.startswith("/"):
+        return text.rstrip("/") or "/"
+    return text.upper().rstrip("\\/")
 
 
 class SettingsDialog(QtWidgets.QDialog):

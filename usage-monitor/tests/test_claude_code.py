@@ -16,7 +16,7 @@ from fakes import FakeHttp, KeyringMixin, TempProfile, http_error, instance  # n
 
 from cache import UsageCache  # noqa: E402
 from providers import registry  # noqa: E402
-from providers.base import ProviderError  # noqa: E402
+from providers.base import IS_WINDOWS, ProviderError, profile_text  # noqa: E402
 from providers.claude_code import ClaudeCodeKind, parse_payload  # noqa: E402
 
 FAKE_TOKEN = "fake-claude-token-0000"
@@ -74,7 +74,7 @@ class DetectAndFetchTests(KeyringMixin, unittest.TestCase):
             profile.write_json(".claude/.credentials.json", CREDS)
             result = ClaudeCodeKind().detect()
         self.assertTrue(result.found)
-        self.assertEqual(result.path, "%USERPROFILE%\\.claude\\.credentials.json")
+        self.assertEqual(result.path, profile_text(".claude", ".credentials.json"))
         self.assertNotIn(FAKE_TOKEN, repr(result))
 
     def test_detect_not_found(self) -> None:
@@ -93,7 +93,7 @@ class DetectAndFetchTests(KeyringMixin, unittest.TestCase):
     def test_fetch_sends_token_and_parses(self) -> None:
         with TempProfile() as profile, FakeHttp(samples.CLAUDE_CODE) as http:
             profile.write_json(".claude/.credentials.json", CREDS)
-            rows = ClaudeCodeKind().fetch(instance("claude_code", settings={"credentials_path": "%USERPROFILE%\\.claude\\.credentials.json"}), None)
+            rows = ClaudeCodeKind().fetch(instance("claude_code", settings={"credentials_path": profile_text(".claude", ".credentials.json")}), None)
         self.assertEqual(len(rows), 3)
         self.assertEqual(http.header(0, "Authorization"), f"Bearer {FAKE_TOKEN}")
         self.assertEqual(http.header(0, "anthropic-beta"), "oauth-2025-04-20")
@@ -103,7 +103,7 @@ class DetectAndFetchTests(KeyringMixin, unittest.TestCase):
         with TempProfile():
             rows = registry.fetch_instance(instance("claude_code"))
         self.assertEqual(rows[0].status, "error")
-        self.assertIn("not found at %USERPROFILE%", rows[0].reason)
+        self.assertIn("not found at " + ("%USERPROFILE%" if IS_WINDOWS else "~"), rows[0].reason)
 
     def test_malformed_file(self) -> None:
         with TempProfile() as profile:

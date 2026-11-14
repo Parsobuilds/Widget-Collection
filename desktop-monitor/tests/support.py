@@ -9,9 +9,11 @@ if PARENT not in sys.path:
     sys.path.insert(0, PARENT)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
+if sys.platform.startswith("win"):
+    os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 TEMP_APPDATA = tempfile.mkdtemp(prefix="dm_test_appdata_")
-os.environ["APPDATA"] = TEMP_APPDATA
+os.environ["APPDATA"] = TEMP_APPDATA            # Windows data folder root
+os.environ["XDG_CONFIG_HOME"] = TEMP_APPDATA    # Linux data folder root
 
 
 def import_monitor():

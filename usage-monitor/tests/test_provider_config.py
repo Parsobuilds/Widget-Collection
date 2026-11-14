@@ -27,7 +27,7 @@ class DefaultsAndPathsTests(unittest.TestCase):
     def test_data_dir_is_under_appdata_and_created(self) -> None:
         with TempProfile() as profile:
             folder = provider_config.data_dir()
-            self.assertEqual(folder, profile.appdata / "DesktopWidgets" / "UsageMonitor")
+            self.assertEqual(folder, profile.config_root / "DesktopWidgets" / "UsageMonitor")
             self.assertTrue(folder.is_dir())
             self.assertEqual(provider_config.config_path(), folder / "config.json")
 
