@@ -75,6 +75,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import provider_config
+import secrets_store
 from cache import UsageCache
 from models import (
     CreditRow,
@@ -163,15 +164,20 @@ def background_config_path() -> Path:
 def log_line(message: str) -> None:
     """Append one timestamped diagnostic line to usage_monitor.log.
 
-    The log rotates at about 512 KB (one old copy is kept). Callers never pass
-    secrets: provider errors are already plain-English and redacted.
+    The log rotates at about 512 KB (one old copy is kept). The text is run
+    through ``secrets_store.redact`` first, so a key can never reach the log
+    file, not even when a caller passes one by accident.
     """
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        safe = secrets_store.redact(str(message))
+    except Exception:  # noqa: BLE001 - a broken redaction must not leak the text
+        safe = "<the message could not be written>"
     try:
         if LOG_PATH.exists() and LOG_PATH.stat().st_size > LOG_MAX_BYTES:
             os.replace(LOG_PATH, LOG_PATH.with_suffix(".log.1"))
         with LOG_PATH.open("a", encoding="utf-8") as handle:
-            handle.write(f"[{stamp}] {message}\n")
+            handle.write(f"[{stamp}] {safe}\n")
     except Exception:
         pass
 
@@ -2368,23 +2374,63 @@ def ensure_single_instance():
 
 
 def purge_secrets() -> int:
-    """Delete all saved API keys for configured provider instances (used on uninstall)."""
-    try:
-        import secrets_store
+    """Delete every API key this app saved in the key store (used on uninstall).
 
-        cfg = provider_config.load_config()
-        ids = [inst.instance_id for inst in provider_config.list_instances(cfg)]
-        secrets_store.delete_all_secrets(ids, raise_on_error=True)
-    except Exception:
-        return 1
-    return 0
+    The ids in ``config.json`` are not enough: the config can be missing or
+    broken, and then it does not mention the ids the key store really holds.
+    So the key store itself is asked which entries it has for our service and
+    every one of them is deleted.
+
+    Returns the number of keys that were really removed, or -1 when the app
+    cannot promise that nothing is left behind. The caller turns that into a
+    failing exit code, so a purge that did not work never looks like a
+    success.
+    """
+    removed = 0
+    confirmed = True
+    if not secrets_store.no_key_store():
+        # The ids the config knows about (on Windows this is the only list there is).
+        config_ids: list[str] = []
+        try:
+            cfg = provider_config.load_config()
+            config_ids = [inst.instance_id for inst in provider_config.list_instances(cfg)]
+        except Exception:  # noqa: BLE001
+            confirmed = False
+
+        # The ids the key store really holds for our service.
+        listed = secrets_store.list_service_instance_ids()
+        if listed is None:
+            if not IS_WINDOWS:
+                # The store could not be listed, so we cannot promise that
+                # nothing is left behind.
+                confirmed = False
+        else:
+            config_ids = list(dict.fromkeys(config_ids + listed))
+
+        for instance_id in config_ids:
+            try:
+                if secrets_store.delete_secret(instance_id):
+                    removed += 1
+            except Exception:  # noqa: BLE001 - one failure must not stop the rest
+                confirmed = False
+
+    if confirmed:
+        print(f"Removed {removed} saved provider key(s) from the key store.")
+    else:
+        print(
+            "Could not confirm that every provider key was removed; "
+            "delete them in your key store (Passwords and Keys)."
+        )
+    return removed if confirmed else -1
 
 
 def main() -> int:
     if "--selftest" in sys.argv:
         return run_selftest()
     if "--purge-secrets" in sys.argv:
-        return purge_secrets()
+        removed = purge_secrets()
+        # A negative number means "not sure": the exit code must not be 0 then.
+        return 0 if removed >= 0 else 1
 
     set_process_dpi_awareness()
     app = QtWidgets.QApplication(sys.argv)

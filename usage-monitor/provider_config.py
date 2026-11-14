@@ -108,10 +108,43 @@ def _is_valid_id(value: str) -> bool:
     return 0 < len(value) <= 32 and all(ch.isascii() and (ch.isalnum() or ch in "-_") for ch in value)
 
 
+def _read_version(raw: dict[str, Any]) -> int:
+    """Return the config format version of a raw file (1 when it has none)."""
+    try:
+        version = int(raw.get("version", 1))
+    except (TypeError, ValueError):
+        return 1
+    return version if version >= 1 else 1
+
+
+def _file_version(path: Path) -> int:
+    """Return the version of the config file on disk (the current one when unknown)."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a missing or broken file has no version
+        return CONFIG_VERSION
+    if isinstance(raw, dict):
+        return _read_version(raw)
+    return CONFIG_VERSION
+
+
 def _normalise(raw: Any) -> dict[str, Any]:
-    """Turn whatever was read from disk into a valid config dictionary."""
+    """Turn whatever was read from disk into a valid config dictionary.
+
+    Two rules run over every provider: an id that is empty or already used is
+    replaced by a fresh one, and a setting that holds a secret is dropped (a
+    secret belongs in the key store, never in config.json).
+    """
     config = default_config()
     if not isinstance(raw, dict):
+        return config
+
+    version = _read_version(raw)
+    if version > CONFIG_VERSION:
+        # The file was written by a newer version of the app: its shape is
+        # unknown, so none of it is used. The version is kept so the file is
+        # never silently downgraded (save_config refuses to overwrite it).
+        config["version"] = version
         return config
 
     try:
@@ -132,6 +165,7 @@ def _normalise(raw: Any) -> dict[str, Any]:
         if not _is_valid_id(instance.instance_id) or instance.instance_id in used_ids:
             instance.instance_id = new_instance_id({"providers": config["providers"]}, used_ids)
         used_ids.add(instance.instance_id)
+        _drop_secret_settings(instance)
         config["providers"].append(instance.to_dict())
     return config
 
@@ -149,8 +183,16 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
 
 
 def save_config(config: dict[str, Any], path: Path | None = None) -> None:
-    """Write config.json safely: write a temp file, then swap it in."""
+    """Write config.json safely: write a temp file, then swap it in.
+
+    A config that a newer version of the app wrote is never overwritten: its
+    shape is not known here, so the file is left alone and the caller is told.
+    """
     target = Path(path) if path is not None else config_path()
+    if _file_version(target) > CONFIG_VERSION:
+        raise ValueError(
+            "This configuration was written by a newer version of the app, so it was not changed."
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     data = _normalise(config)
     tmp_path = target.with_name(target.name + ".tmp")
@@ -205,6 +247,18 @@ def _check_no_secrets(instance: ProviderInstance) -> None:
             "Secret settings must be saved with secrets_store, not in config.json: "
             + ", ".join(bad)
         )
+
+
+def _drop_secret_settings(instance: ProviderInstance) -> None:
+    """Remove every secret setting from an instance that came from disk.
+
+    A config.json that already holds a key (hand-edited, copied from another
+    tool or half-written) must not keep it: the key belongs in the key store,
+    and a file that holds one is a file that leaks one.
+    """
+    secret_keys = _secret_keys_for(instance.kind)
+    for key in [key for key in instance.settings if key in secret_keys]:
+        instance.settings.pop(key)
 
 
 def add_instance(config: dict[str, Any], instance: ProviderInstance) -> None:

@@ -67,6 +67,14 @@ class KeyringMixin:
         self._old_keyring = keyring.get_keyring()
         self.keyring = MemoryKeyring()
         keyring.set_keyring(self.keyring)
+        # The key store check is remembered for the life of the process, so
+        # every test starts with a clean answer.
+        try:
+            import secrets_store
+
+            secrets_store.reset_key_store_probe()
+        except Exception:  # noqa: BLE001 - the module may not be there yet
+            pass
 
     def tearDown(self) -> None:
         keyring.set_keyring(self._old_keyring)

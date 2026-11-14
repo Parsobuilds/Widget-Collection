@@ -239,7 +239,7 @@ def run_tests_linux() -> None:
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     total = 0
     for folder, suite in (("todo-widget", "app"), ("usage-monitor", "tests"),
-                          ("desktop-monitor", "tests")):
+                          ("desktop-monitor", "tests"), ("installer/linux", "tests")):
         command = [str(linux_python()), "-m", "unittest", "discover", "-s", suite,
                    "-p", "test_*.py"]
         print("+", " ".join(command), flush=True)

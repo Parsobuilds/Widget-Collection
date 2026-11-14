@@ -17,6 +17,7 @@ The three helper modules are looked up through module-level names (``registry``,
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 from typing import Any
@@ -249,6 +250,21 @@ class SettingsWindow(QtWidgets.QDialog):
     def _save(self) -> None:
         provider_config.save_config(self._config, self._config_path)
 
+    def _save_or_warn(self) -> bool:
+        """Save the config and tell the user when it could not be saved.
+
+        The config can be a file of a newer version of the app, and that file
+        must not be overwritten; the user has to know that nothing was saved.
+        """
+        try:
+            self._save()
+            return True
+        except Exception as exc:  # noqa: BLE001 - every problem is shown to the user
+            QtWidgets.QMessageBox.warning(
+                self, "Settings",
+                str(exc) or "The settings could not be saved.")
+            return False
+
     def reload(self) -> None:
         """Re-read the config from disk and redraw the list."""
         self._config = self._load()
@@ -344,7 +360,8 @@ class SettingsWindow(QtWidgets.QDialog):
     def toggle_instance(self, instance_id: str, enabled: bool) -> None:
         """Switch a provider on or off and save at once."""
         provider_config.set_enabled(self._config, instance_id, enabled)
-        self._save()
+        if not self._save_or_warn():
+            return
         self.providers_changed.emit()
 
     def remove_instance(self, instance_id: str) -> None:
@@ -366,7 +383,7 @@ class SettingsWindow(QtWidgets.QDialog):
             key_problem = str(exc)
         self._status.pop(instance_id, None)
         self._status_ok.pop(instance_id, None)
-        self._save()
+        self._save_or_warn()
         if key_problem:
             QtWidgets.QMessageBox.warning(
                 self, "Remove provider",
@@ -733,10 +750,13 @@ class SettingsWindow(QtWidgets.QDialog):
         editing = self._editing_id is not None
         instance_id = self._editing_id or provider_config.new_instance_id(self._config)
         instance = self._make_instance(instance_id, label, settings)
+        previous_config = copy.deepcopy(self._config)
+        key_written = False
         try:
             for value in secrets.values():
                 if value.strip():  # blank on edit means "keep the existing key"
                     secrets_store.set_secret(instance_id, value.strip())
+                    key_written = True
         except _secret_error_type() as exc:
             self._say(str(exc) or "The key could not be saved.", "bad")
             return
@@ -747,6 +767,16 @@ class SettingsWindow(QtWidgets.QDialog):
                 provider_config.add_instance(self._config, instance)
             self._save()
         except Exception:
+            # The config could not be saved, so the provider is not in it. A
+            # key that was just written would then be an orphan: no config
+            # would ever mention it, so neither Remove nor --purge-secrets
+            # could ever delete it. Put it back the way it was.
+            self._config = previous_config
+            if key_written:
+                try:
+                    secrets_store.delete_secret(instance_id)
+                except Exception:  # noqa: BLE001 - the key stays, the save failed anyway
+                    pass
             self._say("The settings could not be saved.", "bad")
             return
         if self._last_test:

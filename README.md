@@ -1,4 +1,4 @@
-﻿# Desktop Widgets
+# Desktop Widgets
 
 Three frosted-glass widgets bring your tasks, AI usage and computer stats to your Windows 10 or Windows 11 desktop, and to Linux (x86_64, tested on GNOME on Wayland). Choose the widgets you want and make them your own.
 
@@ -92,11 +92,11 @@ Run the uninstaller that the installer copied into the program folder:
 ~/.local/share/DesktopWidgets/uninstall.sh
 ```
 
-It removes the program files, launchers, menu entries and autostart entries. Your settings are kept unless you say otherwise:
+It stops any running widgets and removes the program files, launchers, menu entries and autostart entries. Your settings are kept unless you say otherwise:
 
-- In a terminal it asks whether to also delete `~/.config/DesktopWidgets`. The default answer, `N`, keeps them.
+- In a terminal it asks whether to also delete the data folders of the widgets you are removing (inside `~/.config/DesktopWidgets`). The default answer, `N`, keeps them. If you say yes, it also removes saved provider keys from the key store, and asks a separate `[y/N]` question before deleting the shared card background (`~/.config/DesktopWidgets/widget_background.json`).
 - `--keep-data` keeps your settings, data and saved API keys. This is what happens when you run it without a terminal.
-- `--purge-data` deletes your settings and data and removes the saved provider keys from the key store, without asking.
+- `--purge-data` deletes the data folders of the removed widgets and removes the saved provider keys from the key store, without asking (the shared `widget_background.json` is kept unless confirmed in a terminal).
 
 If you installed into another folder with `--prefix`, pass the same folder to `uninstall.sh --prefix DIR`.
 

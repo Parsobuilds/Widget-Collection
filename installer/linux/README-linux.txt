@@ -13,7 +13,11 @@ desktopwidgets-todo, desktopwidgets-usage or desktopwidgets-desktop.
 
 Uninstall:
     ~/.local/share/DesktopWidgets/uninstall.sh
-It asks before it deletes your settings in ~/.config/DesktopWidgets.
+It stops the widgets that are running, asks before it deletes the settings of the
+widgets you remove (in ~/.config/DesktopWidgets/<widget>), and asks a separate
+question before it deletes the card background colour that all three widgets
+share (~/.config/DesktopWidgets/widget_background.json). It keeps that file
+unless you say yes.
 
 Notes
 - API keys are saved in your key store (Secret Service, for example gnome-keyring).
