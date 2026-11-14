@@ -196,8 +196,8 @@ def font_family_available(family: str) -> bool:
 
 
 def qt_font(size_pt: int, bold: bool = False, letter_spacing: float = 0.0) -> QFont:
-    """Return Segoe UI on Windows when installed (matches the other widgets), else the system font."""
-    font = QFont("Segoe UI") if IS_WINDOWS and font_family_available("Segoe UI") else QFont()
+    """Return Segoe UI on Windows (matches the other widgets), else the system font."""
+    font = QFont("Segoe UI") if IS_WINDOWS else QFont()
     font.setPointSize(size_pt)
     font.setBold(bold)
     if letter_spacing:
@@ -2279,6 +2279,11 @@ def build_tray(
 # ---------------------------------------------------------------- selftest & main
 def run_selftest() -> int:
     """Fetch rows, print every provider/model row, and save a picture of the card."""
+    if IS_WINDOWS and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        # The offscreen platform loads no system fonts on Windows, so every glyph
+        # would render as a box in the test PNG (same fix as Desktop Monitor).
+        os.environ.setdefault("QT_QPA_FONTDIR",
+                              os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
     set_process_dpi_awareness()
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     config = load_config()

@@ -156,7 +156,7 @@ L6. **windows-ci never installs on the owner's PC**; the real install/uninstall 
 ### Wave 1 (parallel, disjoint files)
 - [ ] test-vms (Codex gpt-6.1-sol failed: ChatGPT usage limit -> re-dispatched to Claude Sonnet 5.5, high) - `~/dw_test/vm/` on the test machine only
 - [x] todo-linux (Claude Sonnet 5.5, medium) - `todo-widget/app/`
-- [ ] usage-linux (Claude Sonnet 5.5, high) - `usage-monitor/`
+- [x] usage-linux (Claude Sonnet 5.5, high) - `usage-monitor/`
 - [x] desktop-linux (Claude Sonnet 5.5, medium) - `desktop-monitor/`
 - [x] windows-ci (Codex gpt-6.1-sol failed: ChatGPT usage limit -> Antigravity gemini-4-argon failed: quota -> re-dispatched to Claude Sonnet 5.5, medium) - `installer/ci/`, `.github/workflows/build-installer.yml`
 ### Wave 2
@@ -176,3 +176,11 @@ L6. **windows-ci never installs on the owner's PC**; the real install/uninstall 
   Desktop Monitor checks and falls back). Fix in usage_monitor.py after usage-linux lands (family check + fallback),
   then re-run CI.
 - 2026-11-14 14:50: desktop-linux landed (Windows 93 OK/3 skip, Linux 70 OK/2 skip; card vs top/free/nvidia-smi: CPU 3.8 vs 5.1 % (sampling window), RAM 3.35 GB vs 3392 MiB, GPU 0 %/44 C/278 vs 279 MiB). NVML v2 memory struct used on Linux only. Sweep 0 hits.
+- 2026-11-14 15:00: usage-linux landed (Windows 217 OK/2 skip, Linux 217 OK/2 skip; key `test-key-123` in Secret Service,
+  absent from config/log, removed with the provider; fail backend -> Settings refuses). Orchestrator fix F1 applied
+  (`font_family_available`). Wave 1 app work committed 6de2096; `.gitattributes` (*.sh LF) 333cd13; pushed.
+  CI re-run 43605842283 started to confirm F1. Wave 2 packaging-linux dispatched (Claude Sonnet 5.5 medium).
+- 2026-11-14 15:25: CI 43605842283 green but the Usage card was still boxes: the Qt offscreen platform on Windows lists
+  no font families at all. Real fix F1b: Usage Monitor's selftest sets `QT_QPA_FONTDIR` to the Windows fonts folder in
+  offscreen mode (same as Desktop Monitor); `qt_font` back to the original. Local selftest card shows real text;
+  tests 217 OK/2 skip. CI re-run to confirm.
