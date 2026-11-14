@@ -1,6 +1,6 @@
 ﻿# Desktop Widgets
 
-Three frosted-glass widgets bring your tasks, AI usage and computer stats to your Windows 10 or Windows 11 desktop. Choose the widgets you want and make them your own.
+Three frosted-glass widgets bring your tasks, AI usage and computer stats to your Windows 10 or Windows 11 desktop, and to Linux (x86_64, tested on GNOME on Wayland). Choose the widgets you want and make them your own.
 
 | To-Do Widget | Usage Monitor | Desktop Monitor |
 |:---:|:---:|:---:|
@@ -29,6 +29,86 @@ For an unattended installation, for example:
 DesktopWidgets-Setup-1.0.0.exe /VERYSILENT /COMPONENTS="todo,usage,monitor"
 ```
 
+## Linux
+
+Desktop Widgets runs on 64-bit (x86_64) Linux with glibc and a desktop session. It is tested on GNOME on Wayland with an NVIDIA GPU.
+
+### Install
+
+1. Download **DesktopWidgets-1.0.0-linux-x86_64.tar.gz** from the project's releases.
+2. Extract it and open the new folder:
+
+   ```text
+   tar -xzf DesktopWidgets-1.0.0-linux-x86_64.tar.gz
+   cd DesktopWidgets-1.0.0-linux-x86_64
+   ```
+
+3. Run the installer as your own user. Do not use `sudo`: the installer refuses to run as root and installs only for you.
+
+   ```text
+   ./install.sh
+   ```
+
+   The installer asks which widgets you want: any combination of **To-Do Widget**, **Usage Monitor** and **Desktop Monitor**. In a desktop session with `zenity` installed it shows a tick-box window; otherwise it asks plain `[Y/n]` questions. It then:
+
+   - copies the program to `~/.local/share/DesktopWidgets`;
+   - adds launchers named `desktopwidgets-todo`, `desktopwidgets-usage` and `desktopwidgets-desktop` in `~/.local/bin`;
+   - adds menu entries called **Desktop Widgets: To-Do Widget**, **Desktop Widgets: Usage Monitor** and **Desktop Widgets: Desktop Monitor**.
+
+4. Start your widgets from the application menu, or run `desktopwidgets-todo`, `desktopwidgets-usage` or `desktopwidgets-desktop`.
+
+For an unattended installation, for example:
+
+```text
+./install.sh --components todo,usage,desktop --yes --autostart
+```
+
+| Option | What it does |
+|---|---|
+| `--components LIST` | Comma list of `todo`, `usage` and `desktop`. The default is all three. |
+| `--yes` | No questions. Uses the defaults and your other options. |
+| `--prefix DIR` | Install into another folder. The path must be absolute. The default is `~/.local/share/DesktopWidgets`. |
+| `--autostart` | Also start the chosen widgets when you sign in. |
+| `--help` | Show the options. |
+
+Running `install.sh` again upgrades the existing install in place.
+
+### Requirements
+
+- A 64-bit (x86_64) Linux desktop with glibc at least as new as the system that built the package (the GitHub build uses Ubuntu, `ubuntu-latest`). Older distributions should build their own with `build.py --linux`.
+- A Secret Service key store, such as **GNOME Keyring** or **KWallet**, to save API keys. Without one, Usage Monitor says so in Settings and refuses to save a key. On Ubuntu you can install GNOME Keyring yourself with:
+
+  ```text
+  sudo apt install gnome-keyring libsecret-1-0
+  ```
+
+- On GNOME, the **AppIndicator** extension if you want the tray icon. See the notes below.
+
+### Uninstall
+
+Run the uninstaller that the installer copied into the program folder:
+
+```text
+~/.local/share/DesktopWidgets/uninstall.sh
+```
+
+It removes the program files, launchers, menu entries and autostart entries. Your settings are kept unless you say otherwise:
+
+- In a terminal it asks whether to also delete `~/.config/DesktopWidgets`. The default answer, `N`, keeps them.
+- `--keep-data` keeps your settings, data and saved API keys. This is what happens when you run it without a terminal.
+- `--purge-data` deletes your settings and data and removes the saved provider keys from the key store, without asking.
+
+If you installed into another folder with `--prefix`, pass the same folder to `uninstall.sh --prefix DIR`.
+
+### What is different on Linux
+
+- **Window placement.** Wayland lets the desktop place windows, not the app. So corner snapping does nothing (the To-Do Widget's **Ctrl+F12** and its menu item are Windows only), remembered window positions do not work, and "always on bottom" is ignored. Dragging the To-Do card still works: the card asks the desktop to move it.
+- **No frosted blur.** The blur effect used the Windows wallpaper, which Linux does not provide. The cards use flat dark glass, or your own background image from Settings, which all three widgets share.
+- **Tray icon.** A tray icon needs a tray host. GNOME shows tray icons only with the AppIndicator extension. Without one the widgets still work: use the gear icon on a card, or right-click the card header, to open Settings and the menu. Usage Monitor and Desktop Monitor also accept `--settings`, which opens Settings straight away.
+- **API keys.** Usage Monitor keeps API keys in the Secret Service, never in `config.json` or in a log. If no key store is running, Settings refuses to save a key.
+- **Desktop Monitor readings.** CPU temperature comes from the kernel's sensors (coretemp, k10temp, zenpower and cpu_thermal are checked), so there is no helper and no administrator approval. The card shows a dash if no sensor is found. GPU readings come from NVIDIA's NVML library when the driver is present, otherwise from basic data in `/sys/class/drm`, otherwise the card shows "No GPU readings".
+- **Fonts and icons.** Linux uses the desktop's default sans font. The gear and tick icons are drawn by the app, so they do not depend on a symbol font.
+
 ## Adding providers in Usage Monitor
 
 Open Settings using the gear icon on the card, or right-click the system tray icon and choose **Settings...**. Select **Add a provider**, choose a type, fill in its details, and save it. You can return to Settings to edit, disable or remove providers.
@@ -53,6 +133,17 @@ Type an environment-variable path into File Explorer's address bar to open it.
 | Shared background setting | `%APPDATA%\DesktopWidgets\widget_background.json` |
 | Saved Usage Monitor API keys | Windows Credential Manager, service `DesktopWidgets.UsageMonitor` |
 
+On Linux the data is under `~/.config/DesktopWidgets` (or `$XDG_CONFIG_HOME/DesktopWidgets` if you set `XDG_CONFIG_HOME`):
+
+| Data | Location on Linux |
+| --- | --- |
+| To-Do Widget tasks, goals and settings | `~/.config/DesktopWidgets/TodoWidget` |
+| Usage Monitor provider settings and cache | `~/.config/DesktopWidgets/UsageMonitor` |
+| Desktop Monitor settings and data | `~/.config/DesktopWidgets/DesktopMonitor` |
+| Shared background setting | `~/.config/DesktopWidgets/widget_background.json` |
+| Saved Usage Monitor API keys | Secret Service (GNOME Keyring or KWallet), service `DesktopWidgets.UsageMonitor` |
+| Start when I sign in | `~/.config/autostart/desktopwidgets-<key>.desktop`, where `<key>` is `todo`, `usage` or `desktop` |
+
 ## Uninstalling
 
 Open Windows **Installed apps** (or **Add or remove programs**), find Desktop Widgets and select **Uninstall**. You can also run `unins000.exe` from the installation folder.
@@ -68,6 +159,14 @@ python build.py
 ```
 
 The build creates `.build-venv`, runs the unit tests, downloads and verifies the LibreHardwareMonitor DLLs, freezes the applications with PyInstaller, and compiles `dist\DesktopWidgets-Setup-1.0.0.exe`.
+
+To build the Linux package, run this on a Linux machine with Python 3.12 (or `uv`) from the project folder:
+
+```text
+python3.12 build.py --linux
+```
+
+It creates `.build-venv-linux`, runs the unit tests with the offscreen Qt platform, freezes the three widgets with PyInstaller, and writes `dist/DesktopWidgets-1.0.0-linux-x86_64.tar.gz`.
 
 ## Licence
 

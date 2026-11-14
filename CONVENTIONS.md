@@ -79,3 +79,23 @@ monkeypatch the module's path function).
 
 Python 3.12, PEP 8, type hints, clear docstrings and comments (the owner is learning Python).
 Tests use `unittest` (no pytest dependency), fake values and mocked HTTP. Never a real key or token.
+
+## Linux
+
+The Linux names (component keys, launchers, menu and autostart file names, lock files) are in the
+table in `docs/LINUX_PORT.md`. Use that table; it is not copied here.
+
+- **Data folder:** use `XDG_CONFIG_HOME` if it is set, otherwise `~/.config`, then add
+  `DesktopWidgets/<App>`. Build it from `os.environ` and `Path.home()`, never a literal path. The
+  shared background file is `DesktopWidgets/widget_background.json` there, with no legacy fallback.
+- **Lock files:** single-instance locks use `fcntl.flock` on `desktopwidgets-<key>.lock` in
+  `XDG_RUNTIME_DIR`, or in the app's data folder if that is not set.
+- **Autostart entries:** each app owns only its own `desktopwidgets-<key>.desktop` file in
+  `$XDG_CONFIG_HOME/autostart`. It writes and deletes that file and nothing else. The installer's
+  `--autostart` option writes the same file.
+- **Keys:** store them only through `keyring`, which uses the Secret Service (gnome-keyring, KWallet).
+  If no key store is available, say so in plain English in Settings and refuse to save. Never write
+  a key to a file.
+- **Platform checks:** Linux-only code sits behind `sys.platform.startswith("linux")`. Windows-only
+  imports (`winreg`, `wmi`, `win32*`, `pythoncom`, `ctypes.windll`) sit behind a `sys.platform == "win32"`
+  check or inside a function, so every module still imports on Linux.

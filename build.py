@@ -252,19 +252,24 @@ def run_tests_linux() -> None:
 
 def make_icons_linux() -> None:
     """Write one 256 px PNG per widget into build/linux_icons."""
-    from PIL import Image
     # make_icons.py draws the usage and monitor .ico files under build/ if missing.
     run([str(linux_python()), str(PROJECT / "installer" / "make_icons.py")])
     folder = BUILD / "linux_icons"
     folder.mkdir(parents=True, exist_ok=True)
     sources = {"todo": PROJECT / "todo-widget" / "app" / "todo_icon.png",
                "usage": BUILD / "usage_icon.ico", "desktop": BUILD / "monitor_icon.ico"}
+    # Pillow lives in the build venv, not in the Python running build.py, so the
+    # conversion runs there too (a clean CI runner has no system Pillow).
+    convert = ("import sys\n"
+               "from PIL import Image\n"
+               "source, target = sys.argv[1], sys.argv[2]\n"
+               "with Image.open(source) as image:\n"
+               "    if source.endswith('.ico'):\n"
+               "        image.size = max(image.info['sizes'])  # largest stored size\n"
+               "    image.convert('RGBA').resize((256, 256)).save(target)\n")
     for key, source in sources.items():
-        with Image.open(source) as image:
-            if source.suffix == ".ico":
-                image.size = max(image.info["sizes"])  # pick the largest stored size
-            image.convert("RGBA").resize((256, 256)).save(
-                folder / f"desktopwidgets-{key}.png")
+        run([str(linux_python()), "-c", convert, str(source),
+             str(folder / f"desktopwidgets-{key}.png")])
 
 
 def verify_linux_apps() -> None:
