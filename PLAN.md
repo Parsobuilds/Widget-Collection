@@ -155,13 +155,17 @@ L7. **build-linux needed a temporary push trigger** (`linux-port`, workflow file
 L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor0/icccm4/image0/keysyms1/render-util0.
     CI installs them so PyInstaller bundles them; the test-machine build lacked them, so its tarball could not start on
     an X11 session. Installed them on the build machine, rebuilt, and `build.py --linux` now fails if they are missing.
+L9. **Build host glibc compatibility (Ubuntu 24.04 vs 26.04):** the Linux test machine runs glibc 2.43, so PyInstaller
+    bundles a `libglib-2.0.so.0` linked against `GLIBC_2.43` that fails on Ubuntu 24.04 LTS (`glibc 2.39`). Building on
+    `ubuntu-latest` (Ubuntu 24.04 LTS, `build-linux.yml`) produces a portable tarball (`103,001,264` B) that runs on both
+    Ubuntu 24.04 and Ubuntu 26.04; documented in `README.md`.
 
 ## Linux chunks
 
 ### Wave 1 (parallel, disjoint files)
-- [ ] test-vms (Codex gpt-6.1-sol failed: ChatGPT usage limit -> Claude Sonnet 5.5, high -> that orchestrator hit the Claude API rate limit at 15:32) - `~/dw_test/vm/` on the test machine only
+- [x] test-vms (Codex gpt-6.1-sol failed: ChatGPT usage limit -> Claude Sonnet 5.5, high -> hit Claude API rate limit at 15:32) - `~/dw_test/vm/` on the test machine only
   - [x] Both guests installed and snapshotted (`clean-windows`, `clean-ubuntu`); start scripts and `autounattend.xml` written.
-  - [ ] Resumed as `test-vms-resume` (Claude Sonnet 5.5 high, brief `docs/briefs/test-vms-resume.md`): install the CURRENT Windows installer inside the guest, screenshot each widget, install the Linux tarball in the Ubuntu guest, write `README-vm.txt`, revert both snapshots, leave both VMs powered off.
+  - [x] Resumed as `test-vms-resume` (Claude Sonnet 5.5 high, brief `docs/briefs/test-vms-resume.md`, finished by Antigravity `gemini-4-hydrogen` after rate-limit compaction): Windows installer proved in Win11 guest, Linux tarball proved in Ubuntu 24.04 guest, `README-vm.txt` written, both snapshots reverted, both VMs powered off.
 - [x] todo-linux (Claude Sonnet 5.5, medium) - `todo-widget/app/`
 - [x] usage-linux (Claude Sonnet 5.5, high) - `usage-monitor/`
 - [x] desktop-linux (Claude Sonnet 5.5, medium) - `desktop-monitor/`
@@ -171,12 +175,12 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
 ### Wave 3
 - [x] docs-linux (Claude Haiku 5.5, medium) - README Linux section, CONVENTIONS, notices; orchestrator merged
 ### Wave 4
-- [ ] final-review (Claude Opus 5.5, high, read-only; first dispatch died with the Claude API rate limit) - Linux secret storage/logging; install.sh/uninstall.sh
-  - [ ] Resumed as `final-review` (Claude Opus 5.5 high via the claudeAgent_minimax provider, brief `docs/briefs/final-review.md`); output `temp/evidence/final-review/findings.md`.
+- [x] final-review (Claude Opus 5.5, high, read-only; first dispatch died with the Claude API rate limit) - Linux secret storage/logging; install.sh/uninstall.sh
+  - [x] Resumed as `final-review` (Claude Opus 5.5 high via `claudeAgent_minimax`, brief `docs/briefs/final-review.md`); output `temp/evidence/final-review/findings.md`.
 
 ### Wave 5 (independent review findings, parallel, disjoint files)
-- [ ] fix-secrets (Claude Opus 5.5 high, `claudeAgent_minimax`) - owns `usage-monitor\` - A-01 to A-08
-- [ ] fix-installer (Codex gpt-6.1-sol high) - owns `installer\linux\` - B-01 to B-11
+- [x] fix-secrets (Claude Opus 5.5 high, `claudeAgent_minimax`) - owns `usage-monitor\` - A-01 to A-08 (14 regression tests)
+- [x] fix-installer (Codex gpt-6.1-sol hit ChatGPT limit -> Antigravity / `claudeAgent_nanogpt` `deepseek/deepseek-v4.1-flash-1017`) - owns `installer\linux\` - B-01 to B-11 (15 regression tests)
 
 ## Linux status log
 - 2026-11-14 14:30: scouting done; test-machine venv, shot.py, libsecret-tools/gnome-screenshot/grim installed; briefs written.
@@ -267,3 +271,19 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
   temperature, RAM 2.1/5.9 GB and C:\ 40 GB free of 59 GB. Note for the report: this installer (51,518,258 B) was built
   at 7739b16, before the To-Do offscreen-font fix, which only touches the `--selftest` path; the installed app is the
   same, and the post-fix build is the one CI run 43612388707 proved on a clean runner.
+- 2026-11-14 17:43: **Wave 5, final builds, CI and Ubuntu VM proof complete (all 14 Done-when checks PASS):**
+  - Wave 5 fixes committed (`8475276`): `fix-secrets` (A-01..A-08, 14 regression tests, 18/18 Secret Service probes) and
+    `fix-installer` (B-01..B-11, 15 regression tests in `installer/linux/tests/`, wired into `build.py --linux`, README updated).
+  - Final local Windows build (`build.py`): exit 0, tests 100 + 231 + 93 = 424 OK, `dist\DesktopWidgets-Setup-1.0.0.exe`
+    `50,053,446` B (sha256 `1610ab0b...`); local `verify_install.py` 7 PASS lines, RESULT: PASS; all 3 PNGs viewed.
+  - Final Linux test-machine build (`build.py --linux --clean`): exit 0, tests 100 + 231 + 70 + 15 = 416 OK, tarball
+    `96,225,341` B (sha256 `5ecb8622...`); temp-HOME install, 3 selftests, `--components todo`/`usage`, `uninstall.sh`
+    keep vs `--purge-data` preserving `widget_background.json`, and whole-word sweep (0 hits) all PASS.
+  - Final CI (`linux-port`): `build-installer` run `43621308381` green (`424` tests, `verify-install` 7 PASS lines,
+    artifacts `DesktopWidgets-Setup` + `selftest-cards` viewed); `build-linux` run `43621352163` green (`416` tests,
+    artifact `DesktopWidgets-linux` `103,001,264` B, sha256 `05d7c730...`), temporary push trigger removed (`d96c01d`).
+  - Decision L9 verified inside the Ubuntu 24.04 LTS VM: the test machine's glibc 2.43 tarball failed in 24.04 on
+    `GLIBC_2.43`; the `ubuntu-latest` (24.04) CI tarball passed `--selftest` on both the test machine (26.04) and the
+    Ubuntu 24.04 VM, installed via `dw-linux.tar.gz.iso`, and launched all 3 widgets cleanly (`dw-test-ubuntu`, no
+    NVIDIA/no error wall). `README-vm.txt` written on the test machine, both VMs powered off and reverted cleanly.
+
