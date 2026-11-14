@@ -174,6 +174,10 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
 - [ ] final-review (Claude Opus 5.5, high, read-only; first dispatch died with the Claude API rate limit) - Linux secret storage/logging; install.sh/uninstall.sh
   - [ ] Resumed as `final-review` (Claude Opus 5.5 high via the claudeAgent_minimax provider, brief `docs/briefs/final-review.md`); output `temp/evidence/final-review/findings.md`.
 
+### Wave 5 (independent review findings, parallel, disjoint files)
+- [ ] fix-secrets (Claude Opus 5.5 high, `claudeAgent_minimax`) - owns `usage-monitor\` - A-01 to A-08
+- [ ] fix-installer (Codex gpt-6.1-sol high) - owns `installer\linux\` - B-01 to B-11
+
 ## Linux status log
 - 2026-11-14 14:30: scouting done; test-machine venv, shot.py, libsecret-tools/gnome-screenshot/grim installed; briefs written.
 - 2026-11-14 14:26: windows-ci landed (9 unit tests OK), committed c8a8a80, pushed linux-port; CI run 43604824642 started.
@@ -217,3 +221,49 @@ L8. **The xcb (X11) libraries are bundled.** Qt's xcb plugin needs libxcb-cursor
   trigger was re-added and pushed (cddd24d) to run the workflow on the final commit; build-installer dispatched directly
   with `gh workflow run build-installer.yml --ref linux-port` (run 43611784236). Both runs in flight; the trigger is
   removed again once build-linux is green.
+- 2026-11-14 15:50: build-linux run 43611774040 green on cddd24d with the xcb bundling in place (job build, success);
+  the five libxcb-* libraries are in the tarball; the trigger was removed again (132d1f9) and pushed. build-installer run
+  43611784236 green: 7 PASS lines, RESULT: PASS, artifacts DesktopWidgets-Setup (52,724,822 B) + selftest-cards.
+- 2026-11-14 15:52: **finding F2 (parent, from the CI artifacts): the To-Do Widget card rendered as empty boxes on the
+  clean runner.** The offscreen platform loads no system fonts on Windows; Usage Monitor (F1b) and Desktop Monitor had
+  been given `QT_QPA_FONTDIR`, but the To-Do Widget never was. Fixed in `todo-widget/app/todo_widget.py` (commit
+  2468937): the same three lines, Windows-gated, so Linux is untouched. Verified: the local offscreen card now shows real
+  text, Windows tests 100 OK (1 skip), Linux tests 100 OK, and the Linux card still shows the empty "No tasks right now!"
+  state. build-installer re-dispatched (run 43612388707) to confirm on a clean runner.
+- 2026-11-14 15:56: build-installer run 43612388707 green (build + verify-install, 7 PASS lines, RESULT: PASS), artifacts
+  DesktopWidgets-Setup (52,721,725 B) and selftest-cards. The To-Do card from the clean runner now shows real text, so
+  F2 is closed. The tarball's install.sh and uninstall.sh hashes match the repository copies exactly.
+- 2026-11-14 15:53: parent re-verified the earlier checks from the evidence on disk: check 9's short-name hits are
+  substrings inside third-party binaries (Tomsk, Sao_Tome, Tomé, Tombstone) - a whole-word search of the extracted
+  tarball returns 0 files, and the data folder is clean; check 7's card (real GNOME Wayland desktop) reads RAM
+  5.8/15.0 GB against `free` 5980/15402 MB, GPU 43 C against `nvidia-smi` 43 C, disks / 259 GB free of 441 GB, CPU 23 %
+  against `top` 21.1 us + 18.9 sy (different sampling window), CPU 50 C against k10temp 44-46 C.
+- 2026-11-14 16:05: the independent review finished (Claude Opus 5.5 high, read-only, `claudeAgent_minimax`;
+  findings in `temp/evidence/final-review/findings.md`). 19 findings, every one proved by running code on the test
+  machine or on Windows: **B-01 (high)** - `uninstall.sh --purge-data` deletes the whole shared
+  `$XDG_CONFIG_HOME/DesktopWidgets` folder, so the shared `widget_background.json` and the other widgets' data are
+  destroyed; A-01/A-02 (medium) - `purge_secrets()` only deletes the keys named in `config.json` (a missing or corrupt
+  config means the key survives while the app says it removed it) and the key is written before the config is saved with
+  no rollback; B-02/B-03/B-04/B-05 (medium) - stale launchers after a partial re-install, relative XDG paths used as
+  given, the uninstaller deleting another install's menu entry, and the uninstaller not stopping the running widgets;
+  A-03 to A-08 and B-06 to B-11 (low/info). The review also confirmed as correct: the key never reaches a file through
+  the app, the fail/null backends refuse, Remove touches only our own service and ids, the prefix guards, the zenity
+  tick-box, the launcher content, `desktop-file-validate`, the upgrade path and the Windows behaviour.
+- 2026-11-14 16:10: the findings are split into two fix chunks with disjoint file scopes and run in parallel:
+  `fix-secrets` (Claude Opus 5.5 high) owns `usage-monitor\` and fixes A-01 to A-08; `fix-installer` (Codex gpt-6.1-sol
+  high) owns `installer\linux\` and fixes B-01 to B-11. Each fix needs a regression test. The reviewer added `xvfb` to
+  the test machine with apt while trying to drive the zenity dialog; no other package was added.
+- 2026-11-14 16:15: the local Windows build was re-run from HEAD (2468937 + the plan commits): exit 0, tests 100 + 217
+  + 93 = 410 OK, installer `dist\DesktopWidgets-Setup-1.0.0.exe` 51,509,505 B (sha256 40081fca...), so `dist/` now
+  includes the To-Do font fix. The local `installer\ci\verify_install.py` was then run against that exact file with a
+  clean profile: 7 PASS lines and RESULT: PASS (silent install, the three selftests, the uninstall that keeps the
+  user data, and the todo-only reinstall), and the To-Do card it produced shows real text.
+- 2026-11-14 16:20: **check 13, Windows half, verified by the parent from the evidence:** the current Windows installer was
+  copied to the test machine, put on a CD image and run inside the Win11 Enterprise Evaluation guest. The guest's own
+  terminal shows the installed exe's SHA256 8c2482e8891dac5707fb250285f8b3d785600ca7057e9c7b41ad5598d24cc135, which is
+  the build under test. All three widgets run with a clean first run: the Usage Monitor shows "No providers yet" with the
+  "Add a provider" button, the To-Do Widget shows the three neutral examples, and the Desktop Monitor shows the guest's
+  own name DW-TEST-WIN, GPU 0 % on "Microsoft Basic Display Adapter" (no NVIDIA and no error wall), a dash for the
+  temperature, RAM 2.1/5.9 GB and C:\ 40 GB free of 59 GB. Note for the report: this installer (51,518,258 B) was built
+  at 7739b16, before the To-Do offscreen-font fix, which only touches the `--selftest` path; the installed app is the
+  same, and the post-fix build is the one CI run 43612388707 proved on a clean runner.
