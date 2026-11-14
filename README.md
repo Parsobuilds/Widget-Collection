@@ -174,6 +174,8 @@ The build machine needs the X11 libraries that Qt's X11 support loads, so that t
 sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0
 ```
 
+Build on the oldest target Linux distribution (for example Ubuntu 24.04 LTS, as the release workflow does), because PyInstaller bundles system libraries linked against the build host's glibc.
+
 ## Licence
 
 Desktop Widgets is available under the [MIT Licence](LICENSE). See [Third-party notices](THIRD_PARTY_NOTICES.md) for included components and their licences.
