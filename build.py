@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -18,6 +19,8 @@ PROJECT = Path(__file__).resolve().parent
 BUILD = PROJECT / "build"
 DIST = PROJECT / "dist"
 VENV = PROJECT / ".build-venv"
+VENV_LINUX = PROJECT / ".build-venv-linux"
+LINUX_DIR = PROJECT / "installer" / "linux"
 LHM_URL = ("https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/"
            "releases/download/v0.9.6/LibreHardwareMonitor.zip")
 ZIP_SHA256 = "086d9f1b5a99e643edc2cfaaac16051685b551e4c5ac0b32a57c58c0e529c001"
@@ -189,15 +192,165 @@ def clean() -> None:
                     path.unlink()
 
 
+# ---------------------------------------------------------------- Linux path
+# Everything in this block runs only with --linux on Linux; the Windows path is untouched.
+LINUX_BINARIES = ("TodoWidget", "UsageMonitor", "DesktopMonitor")
+
+
+def linux_python() -> Path:
+    return VENV_LINUX / "bin" / "python"
+
+
+def ensure_venv_linux() -> None:
+    """Create .build-venv-linux with Python 3.12 and install the pinned packages."""
+    if not linux_python().is_file():
+        found = shutil.which("python3.12")
+        if sys.version_info[:2] == (3, 12):
+            run([sys.executable, "-m", "venv", str(VENV_LINUX)])
+        elif found:
+            run([found, "-m", "venv", str(VENV_LINUX)])
+        elif shutil.which("uv"):
+            run(["uv", "venv", "--python", "3.12", str(VENV_LINUX)])
+        else:
+            raise RuntimeError("Python 3.12 is required. Install python3.12 (or uv) and try again.")
+    probe = subprocess.run(
+        [str(linux_python()), "-c",
+         "import PySide6, keyring, secretstorage, PyInstaller, PIL, psutil, pynvml"],
+        cwd=PROJECT, capture_output=True,
+    )
+    if probe.returncode:
+        requirements = str(PROJECT / "requirements-build-linux.txt")
+        has_pip = subprocess.run([str(linux_python()), "-m", "pip", "--version"],
+                                 capture_output=True).returncode == 0
+        if has_pip:
+            run([str(linux_python()), "-m", "pip", "install", "-r", requirements])
+        else:  # a venv made by uv has no pip
+            run(["uv", "pip", "install", "--python", str(linux_python()),
+                 "-r", requirements])
+
+
+def run_tests_linux() -> None:
+    """Run the three unit-test suites offscreen and print how many tests ran."""
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    total = 0
+    for folder, suite in (("todo-widget", "app"), ("usage-monitor", "tests"),
+                          ("desktop-monitor", "tests")):
+        command = [str(linux_python()), "-m", "unittest", "discover", "-s", suite,
+                   "-p", "test_*.py"]
+        print("+", " ".join(command), flush=True)
+        result = subprocess.run(command, cwd=PROJECT / folder, env=env,
+                                capture_output=True, text=True)
+        match = re.search(r"^Ran (\d+) tests?", result.stderr, re.MULTILINE)
+        count = int(match.group(1)) if match else 0
+        print(f"{folder}: {count} tests, exit {result.returncode}", flush=True)
+        if result.returncode:
+            sys.stderr.write(result.stderr)
+            raise RuntimeError(f"Unit tests failed in {folder}.")
+        total += count
+    print(f"Unit tests passed: {total} in total", flush=True)
+
+
+def make_icons_linux() -> None:
+    """Write one 256 px PNG per widget into build/linux_icons."""
+    from PIL import Image
+    # make_icons.py draws the usage and monitor .ico files under build/ if missing.
+    run([str(linux_python()), str(PROJECT / "installer" / "make_icons.py")])
+    folder = BUILD / "linux_icons"
+    folder.mkdir(parents=True, exist_ok=True)
+    sources = {"todo": PROJECT / "todo-widget" / "app" / "todo_icon.png",
+               "usage": BUILD / "usage_icon.ico", "desktop": BUILD / "monitor_icon.ico"}
+    for key, source in sources.items():
+        with Image.open(source) as image:
+            if source.suffix == ".ico":
+                image.size = max(image.info["sizes"])  # pick the largest stored size
+            image.convert("RGBA").resize((256, 256)).save(
+                folder / f"desktopwidgets-{key}.png")
+
+
+def verify_linux_apps() -> None:
+    """Run each frozen binary with --selftest under a fresh, empty HOME."""
+    bundle = DIST / "DesktopWidgets"
+    for name in LINUX_BINARIES:
+        if not (bundle / name).is_file():
+            raise RuntimeError(f"Missing build output: {(bundle / name).relative_to(PROJECT)}")
+    BUILD.mkdir(exist_ok=True)
+    for name in LINUX_BINARIES:
+        with tempfile.TemporaryDirectory(prefix="selftest-", dir=BUILD) as directory:
+            home = Path(directory) / "home"
+            config = Path(directory) / "config"
+            home.mkdir()
+            config.mkdir()
+            env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config),
+                       QT_QPA_PLATFORM="offscreen")
+            env.pop("XDG_RUNTIME_DIR", None)
+            run([str(bundle / name), "--selftest"], env=env)
+            if not list(config.rglob("selftest_card.png")):
+                raise RuntimeError(f"{name} --selftest wrote no selftest_card.png")
+
+
+def build_apps_linux() -> None:
+    make_icons_linux()
+    run([str(linux_python()), "-m", "PyInstaller", "--noconfirm", "--clean",
+         str(LINUX_DIR / "DesktopWidgets-linux.spec")])
+    verify_linux_apps()
+
+
+def pack_linux(version: str) -> Path:
+    """Write dist/DesktopWidgets-<version>-linux-x86_64.tar.gz with the install scripts."""
+    top = f"DesktopWidgets-{version}-linux-x86_64"
+    archive = DIST / f"{top}.tar.gz"
+    items = [(DIST / "DesktopWidgets", "DesktopWidgets"),
+             (BUILD / "linux_icons", "icons"),
+             (PROJECT / "LICENSE", "LICENSE"),
+             (PROJECT / "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
+             (LINUX_DIR / "install.sh", "install.sh"),
+             (LINUX_DIR / "uninstall.sh", "uninstall.sh"),
+             (LINUX_DIR / "README-linux.txt", "README-linux.txt")]
+
+    def neutral(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        """Drop the builder's user and group names; keep the permission bits."""
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        if info.name.endswith(".sh"):
+            info.mode = 0o755
+        return info
+
+    with tarfile.open(archive, "w:gz") as bundle:
+        for source, name in items:
+            bundle.add(source, arcname=f"{top}/{name}", filter=neutral)
+    return archive
+
+
+def main_linux(version: str, do_clean: bool) -> int:
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("--linux only works on Linux. Run build.py without it on Windows.")
+    if do_clean:
+        clean()
+    ensure_venv_linux()
+    run_tests_linux()
+    build_apps_linux()
+    archive = pack_linux(version)
+    print(f"Wrote {archive.relative_to(PROJECT)} ({archive.stat().st_size / 1e6:.1f} MB)")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--app-only", action="store_true")
     mode.add_argument("--installer-only", action="store_true")
     parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--linux", action="store_true",
+                        help="build the Linux tarball (run this on Linux)")
     parser.add_argument("--version", default=os.environ.get("DESKTOP_WIDGETS_VERSION", "1.0.0"))
     args = parser.parse_args()
     version = normalize_version(args.version)
+    if args.linux:
+        if args.app_only or args.installer_only:
+            parser.error("--linux cannot be combined with --app-only or --installer-only")
+        return main_linux(version, args.clean)
+    if not sys.platform.startswith("win"):
+        raise RuntimeError("This is the Windows build. On Linux run: python build.py --linux")
     if args.clean and args.installer_only:
         parser.error("--clean cannot be combined with --installer-only")
     if args.clean:

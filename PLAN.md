@@ -160,7 +160,7 @@ L6. **windows-ci never installs on the owner's PC**; the real install/uninstall 
 - [x] desktop-linux (Claude Sonnet 5.5, medium) - `desktop-monitor/`
 - [x] windows-ci (Codex gpt-6.1-sol failed: ChatGPT usage limit -> Antigravity gemini-4-argon failed: quota -> re-dispatched to Claude Sonnet 5.5, medium) - `installer/ci/`, `.github/workflows/build-installer.yml`
 ### Wave 2
-- [ ] packaging-linux (Codex out of allowance; Antigravity out of quota; planned: Claude Sonnet 5.5 medium) - `build.py`, `installer/linux/`, `requirements-build-linux.txt`, `.github/workflows/build-linux.yml`
+- [x] packaging-linux (Codex out of allowance; Antigravity out of quota; planned: Claude Sonnet 5.5 medium) - `build.py`, `installer/linux/`, `requirements-build-linux.txt`, `.github/workflows/build-linux.yml`
 ### Wave 3
 - [ ] docs (Antigravity gemini-3.8-flash, low) - README Linux section draft; orchestrator merges, sweeps, builds, CI
 ### Wave 4
@@ -184,3 +184,7 @@ L6. **windows-ci never installs on the owner's PC**; the real install/uninstall 
   no font families at all. Real fix F1b: Usage Monitor's selftest sets `QT_QPA_FONTDIR` to the Windows fonts folder in
   offscreen mode (same as Desktop Monitor); `qt_font` back to the original. Local selftest card shows real text;
   tests 217 OK/2 skip. CI re-run to confirm.
+- 2026-11-14 15:40: packaging-linux landed (Claude Sonnet 5.5 medium). `build.py --linux` on the test machine exit 0,
+  387 tests (todo 100, usage 217, desktop 70); tarball 96,200,706 B; install/uninstall flag paths verified in temp HOMEs
+  (evidence temp/evidence/packaging-linux/). Windows `build.py --help` unchanged plus `--linux`. Committed. Wave 3 docs
+  chunk dispatched (Claude Haiku 5.5).
