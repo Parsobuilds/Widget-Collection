@@ -435,6 +435,18 @@ class SettingsWindowTests(unittest.TestCase):
         QTest.keyClick(win._inputs["cap"], QtCore.Qt.Key.Key_Return)
         self.assertEqual(self.config.disk["providers"], [])
 
+    def test_key_prefix_preserves_trailing_space(self) -> None:
+        win = self.make()
+        win.start_add()
+        prefix_kind = StubKind()
+        prefix_kind.kind = "custom_json"
+        prefix_kind.display_name = "Custom"
+        prefix_kind.category = "custom"
+        prefix_kind.fields = [FieldSpec("key_prefix", "Key prefix", default="Bearer ", required=False)]
+        win._build_form(prefix_kind, None)
+        _label, settings, _secrets = win._collect()
+        self.assertEqual(settings["key_prefix"], "Bearer ")
+
     def test_banned_strings_absent(self) -> None:
         win = self.make()
         src = Path(settings_window.__file__).read_text(encoding="utf-8")

@@ -91,6 +91,28 @@ def has_secret(instance_id: str) -> bool:
         return False
 
 
+def delete_all_secrets(
+    instance_ids: list[str] | tuple[str, ...],
+    *,
+    raise_on_error: bool = False,
+) -> int:
+    """Delete saved keys for every id in ``instance_ids``. Returns count deleted."""
+    count = 0
+    first_error: SecretStoreError | None = None
+    for instance_id in instance_ids:
+        if isinstance(instance_id, str) and instance_id.strip():
+            try:
+                delete_secret(instance_id)
+                count += 1
+            except SecretStoreError as exc:
+                if first_error is None:
+                    first_error = exc
+    if raise_on_error and first_error is not None:
+        raise first_error
+    return count
+
+
+
 def redact(text: str, *secrets: str | None) -> str:
     """Return ``text`` with every secret and credential-looking part masked.
 

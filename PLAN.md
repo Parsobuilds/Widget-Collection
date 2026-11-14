@@ -38,50 +38,96 @@ this work started (snapshot taken 2026-11-14) and are left untouched.
    version and SHA-256, so CI does not need the gitignored `lib\lhm`.
 8. Modal and other cloud spend trackers: real billing API if one is documented and usable
    without bundling a large SDK, otherwise the `manual_budget` kind.
-(more added as the work proceeds)
+9. **Licence holder:** `LICENSE` (MIT, same as the To-Do Widget) names "Desktop Widgets
+   contributors", because nothing personal may ship in the installer or the repository.
+10. **Neutral commit identity:** this repository's local git identity is "Desktop Widgets
+    contributors" with the account's GitHub no-reply address, so a later public history carries
+    no personal name or email.
+11. **Search list outside the repo:** the exact personal-data search terms live in a script
+    outside the repository (a list inside it would itself be personal data).
+12. **Modal:** no key-based HTTP billing API (billing is only exposed through its Python SDK /
+    CLI, Team plans), so it ships as the `modal_budget` manual preset, labelled manual.
+13. **Extra key providers:** OpenRouter and DeepSeek added after matching their official API
+    reference pages; tested with the documented sample replies (mocked), not live.
+14. **To-Do Goals input:** the packaged app gets an add-goal / add-step input line, because
+    goals were previously only added from a command-line tool a frozen exe does not have.
+15. **PawnIO is not bundled:** no redistribution permission was found, so the elevated helper
+    installs it from the official release at install time, pinned by version and SHA-256, and
+    only when it is not already present. A PawnIO that was there before is never removed.
+16. **LibreHardwareMonitorLib (MPL-2.0) is bundled** in the CPU helper's `lhm\` folder,
+    downloaded by `build.py` from the official release pinned by SHA-256, with the MPL notice
+    and a link to the matching source in `THIRD_PARTY_NOTICES.md`.
+17. **Usage Monitor polling** runs only on the worker thread (the old card called the poll from
+    the UI thread on Refresh); Settings changes trigger a queued forced poll.
+18. **Elevated helper hardening:** `CpuTempHelper.exe` resolves `ProgramFiles`, `ProgramData`,
+    and `System32` via Win32 Known Folders / `GetSystemDirectoryW` when frozen, always verifies
+    PawnIO SHA-256 + stages setups inside `%ProgramFiles%` before execution, writes Task
+    Scheduler XML inside `%ProgramFiles%`, checks reparse points on every write/log path,
+    and avoids user-writable `--uninstall` fallbacks.
+19. **Interactive uninstall secret purge & custom_json prefix:** `--purge-secrets` exits non-zero
+    if Credential Manager deletion fails so the uninstaller preserves settings on error;
+    `SettingsWindow` preserves trailing spaces on `key_prefix` (e.g. `"Bearer "`).
 
 ## Chunks
 
 ### Wave 1 (parallel, no shared files)
 
-- [ ] **usage-providers** (owns `usage-monitor\models.py`, `cache.py`, `collectors\`, `providers\`, `secrets_store.py`, `provider_config.py`, `SOURCES.md`, `tests\` except `test_settings_window.py`)
-  - [ ] registry, config, credential store exactly per `INTERFACE.md`
-  - [ ] catalogue: claude_code, codex, antigravity (Detect), nanogpt (key), google_ai_studio_t3 (hidden without T3 DB), custom_json, manual_budget, plus any documented key-based service
-  - [ ] Modal: billing API checked; manual budget otherwise
-  - [ ] no hardcoded model list, no private ledger import, no hardcoded balances or caps
-  - [ ] tests: registry, custom provider (mocked HTTP), secret storage (fake keyring), config round trip, old collector tests updated
-- [ ] **usage-settings-ui** (owns `usage-monitor\settings_window.py`, `tests\test_settings_window.py`)
-  - [ ] provider list with status, on/off switch, Remove
-  - [ ] Add provider: catalogue picker, description, unofficial label, fields, Detect, Test, Save
-  - [ ] custom provider form; manual budget form says it is manual
-  - [ ] tests with a stub registry (offscreen Qt)
-- [ ] **desktop-monitor** (owns everything in `desktop-monitor\`)
-  - [ ] depersonalised; machine name from the computer; paths per `CONVENTIONS.md`
-  - [ ] no NVIDIA / AMD / Intel GPU: sensible card, no crash, no error wall
-  - [ ] Settings window: optional indicators (ALEXA-style feed off unless a file is set), drives, background
-  - [ ] CPU helper: `CpuTempHelper` with `--install` / `--uninstall` (elevated) and run mode, Program Files location, new task name, PawnIO only if absent
-  - [ ] `disk_alert.py` without chat webhooks or personal config
-  - [ ] selftest passes; unit tests added
-- [ ] **todo-widget** (owns `todo-widget\app\`)
-  - [ ] merge Goals code into the packaged layout; data in `%APPDATA%\DesktopWidgets\TodoWidget`
-  - [ ] empty list (or 2-3 neutral examples) and empty Goals on first run
-  - [ ] no venv fallbacks, no personal names/paths; tests pass
-- [ ] **deps-research** (read-only): licences and redistribution for LibreHardwareMonitorLib and PawnIO, PawnIO silent install, one optional elevated step in a per-user Inno installer, SignPath Foundation terms and GitHub Actions integration. Output: `docs\research\deps.md`.
+- [x] **usage-providers** (owns `usage-monitor\models.py`, `cache.py`, `collectors\`, `providers\`, `secrets_store.py`, `provider_config.py`, `SOURCES.md`, `tests\` except `test_settings_window.py`)
+  - [x] registry, config, credential store exactly per `INTERFACE.md`
+  - [x] catalogue: claude_code, codex, antigravity (Detect), nanogpt (key), google_ai_studio_t3 (hidden without T3 DB), custom_json, manual_budget, plus any documented key-based service (openrouter, deepseek, modal_budget)
+  - [x] Modal: billing API checked; manual budget otherwise
+  - [x] no hardcoded model list, no private ledger import, no hardcoded balances or caps
+  - [x] tests: registry, custom provider (mocked HTTP), secret storage (fake keyring), config round trip, old collector tests updated
+- [x] **usage-settings-ui** (owns `usage-monitor\settings_window.py`, `tests\test_settings_window.py`)
+  - [x] provider list with status, on/off switch, Remove
+  - [x] Add provider: catalogue picker, description, unofficial label, fields, Detect, Test, Save
+  - [x] custom provider form; manual budget form says it is manual
+  - [x] tests with a stub registry (offscreen Qt)
+- [x] **desktop-monitor** (owns everything in `desktop-monitor\`)
+  - [x] depersonalised; machine name from the computer; paths per `CONVENTIONS.md`
+  - [x] no NVIDIA / AMD / Intel GPU: sensible card, no crash, no error wall
+  - [x] Settings window: optional indicators (ALEXA-style feed off unless a file is set), drives, background
+  - [x] CPU helper: `CpuTempHelper` with `--install` / `--uninstall` (elevated) and run mode, Program Files location, new task name, PawnIO only if absent
+  - [x] `disk_alert.py` without chat webhooks or personal config
+  - [x] selftest passes; unit tests added
+- [x] **todo-widget** (owns `todo-widget\app\`)
+  - [x] merge Goals code into the packaged layout; data in `%APPDATA%\DesktopWidgets\TodoWidget`
+  - [x] empty list (or 2-3 neutral examples) and empty Goals on first run
+  - [x] no venv fallbacks, no personal names/paths; tests pass
+- [x] **deps-research** (read-only): licences and redistribution for LibreHardwareMonitorLib and PawnIO, PawnIO silent install, one optional elevated step in a per-user Inno installer, SignPath Foundation terms and GitHub Actions integration. Output: `docs\research\deps.md`.
 
 ### Wave 2
 
-- [ ] **orchestrator:** wire registry + settings window into `usage-monitor\usage_monitor.py` (empty state "Add a provider", gear on card, tray Settings, `widget_state.json`, neutral names)
-- [ ] **installer** (owns `build.py`, `installer\`, PyInstaller specs, `.github\workflows\`, `THIRD_PARTY_NOTICES.md`, `SIGNING.md`)
-- [ ] **docs** (owns `README.md`)
+- [x] **orchestrator:** wire registry + settings window into `usage-monitor\usage_monitor.py` (empty state "Add a provider", gear on card, tray Settings, `widget_state.json`, neutral names)
+- [x] **installer** (owns `build.py`, `installer\`, PyInstaller specs, `.github\workflows\`, `THIRD_PARTY_NOTICES.md`, `SIGNING.md`)
+- [x] **docs** (owns `README.md`, `docs\*.png`)
 
 ### Wave 3 (orchestrator)
 
-- [ ] full `python build.py`
-- [ ] independent review: secrets storage/logging and everything done with admin rights
-- [ ] Done-when checks 1-13
-- [ ] push to private `Widget-Collection`, CI run
+- [x] full `python build.py`
+- [x] independent review: secrets storage/logging and everything done with admin rights
+- [x] Done-when checks 1-13 (Check 9 interactive UAC prompt left for owner approval)
+- [x] push to private `Widget-Collection`, CI run
 
 ## Status log
 
 - 2026-11-14: scouting done, private GitHub repo `smegsmearer/Widget-Collection` created (empty),
   sources copied, `.build-venv` created (Python 3.12, `requirements-build.txt`).
+- 2026-11-14: wave 1 done and verified by the orchestrator. Tests: usage-monitor 189 OK,
+  desktop-monitor 55 OK, todo-widget 89 OK. Clean-profile selftests: all three exit 0 (cards
+  checked by eye). Workers: usage-providers = Opus, usage-settings-ui / desktop-monitor /
+  todo-widget = Sonnet, deps-research = Haiku. No re-dispatches. Orchestrator wired
+  `usage_monitor.py`. Personal-data sweep clean; commit `be50f03` pushed to the private repo.
+- 2026-11-14: wave 2 completed via Codex after Claude 5h limit reset window (`docs` =
+  `gpt-6.1-terra`, `installer` = `gpt-6.1-sol`). Orchestrator handoff to Antigravity
+  `gemini-4-argon`.
+- 2026-11-14: wave 3 security review completed by `gemini-4-hydrogen` (`xhigh` thinking;
+  `gpt-6-astra` hit ChatGPT allowance). Fixed 1 High + 3 Medium + Low hardening findings
+  (SHA-256 verification and ProgramFiles staging for `--pawnio-setup`, Task XML inside
+  ProgramFiles, reparse-point checks on `write()`/`log()`/`setup_log()`, Win32 Known
+  Folders + safe env-var `rmdir` in `cpu_temp_helper.py`, `--purge-secrets` non-zero exit
+  on error, cross-port redirect check, `key_prefix` trailing space fix in `settings_window.py`).
+- 2026-11-14: rebuilt `dist\DesktopWidgets-Setup-1.0.0.exe` (50,018,352 bytes / 47.70 MB).
+  Tests: 89 To-Do + 190 Usage Monitor + 55 Desktop Monitor = 334 OK. All 4 frozen `--selftest`
+  checks passed. Automated Checks 1-8 and 10-11 passed; Check 9 automated parts passed (live
+  UAC install/uninstall of `monitor\cputemp` left for interactive approval).

@@ -193,18 +193,29 @@ def read_json_file(path: Path, what: str) -> dict[str, Any]:
 # HTTP
 # ---------------------------------------------------------------------------
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follow a redirect only to the same host over the same (or safer) scheme.
+    """Follow a redirect only to the same host and port over the same (or safer) scheme.
 
     urllib copies request headers (including the API key) onto the redirected
-    request, so a redirect to another host could hand the key to a stranger.
+    request, so a redirect to another host or port could hand the key to a stranger.
     """
+
+    @staticmethod
+    def _effective_port(parts: urllib.parse.SplitResult) -> int | None:
+        if parts.port is not None:
+            return parts.port
+        return 443 if parts.scheme == "https" else (80 if parts.scheme == "http" else None)
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
         old = urllib.parse.urlsplit(req.full_url)
         new = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, newurl))
         same_host = (old.hostname or "").lower() == (new.hostname or "").lower()
         scheme_ok = new.scheme == old.scheme or (old.scheme == "http" and new.scheme == "https")
-        if not (same_host and scheme_ok):
+        old_port = self._effective_port(old)
+        new_port = self._effective_port(new)
+        port_ok = (old_port == new_port) or (
+            old.scheme == "http" and new.scheme == "https" and old.port is None and new.port is None
+        )
+        if not (same_host and scheme_ok and port_ok):
             raise ProviderError(
                 ProviderError.BAD_RESPONSE,
                 f"{old.hostname} redirected to a different address, which is not followed for safety.",

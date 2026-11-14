@@ -1,0 +1,20 @@
+# Windows version-resource template, rendered by build.py for each executable.
+VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=@VERSION_TUPLE@, prodvers=@VERSION_TUPLE@,
+        mask=0x3F, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo([StringTable("040904B0", [
+            StringStruct("CompanyName", "Desktop Widgets contributors"),
+            StringStruct("FileDescription", "Desktop Widgets - @APP@"),
+            StringStruct("FileVersion", "@VERSION@"),
+            StringStruct("InternalName", "@APP@"),
+            StringStruct("LegalCopyright", "Desktop Widgets contributors; MIT License"),
+            StringStruct("OriginalFilename", "@APP@.exe"),
+            StringStruct("ProductName", "Desktop Widgets"),
+            StringStruct("ProductVersion", "@VERSION@"),
+        ])]),
+        VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+    ],
+)

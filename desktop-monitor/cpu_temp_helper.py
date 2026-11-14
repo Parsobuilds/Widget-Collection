@@ -56,12 +56,15 @@ INSTALL_SUBDIR = Path(PRODUCT_DIR_NAME) / "CpuTempHelper"      # below %ProgramF
 EXPECTED_LHM_DLL_SHA256 = "6ebc194316536ba61af5be24508ad9fcbb2ecc685e716c12e787c79530f66bf0"
 
 # PawnIO (kernel driver LibreHardwareMonitor uses to read CPU sensors).
-# Switches of its setup exe, kept in one place so they are easy to correct.
+# Pinned release URL and SHA-256 for PawnIO 2.2.0.
+PAWNIO_SETUP_URL = "https://github.com/namazso/PawnIO.Setup/releases/download/2.2.0/PawnIO_setup.exe"
+EXPECTED_PAWNIO_SETUP_SHA256 = "1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032"
 PAWNIO_SETUP_ARGS = ("-install", "-silent")
 PAWNIO_UNINSTALL_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO"
 PAWNIO_SERVICE_KEY = r"SYSTEM\CurrentControlSet\Services\PawnIO"
 OWN_REG_KEY = r"SOFTWARE\DesktopWidgets\CpuTempHelper"
 OWN_REG_VALUE = "PawnIOInstalledByUs"
+OWN_INSTALLED_VALUE = "Installed"
 SETUP_EXIT_OK = (0, 3010)          # 3010 = success, restart needed
 SETUP_TIMEOUT_S = 300
 
@@ -112,8 +115,34 @@ def log_path() -> str:
     return os.path.join(data_dir(), "cpu_temp_helper.log")
 
 
+def _known_folder(guid_bytes: bytes, env_name: str, fallback: str) -> Path:
+    """Resolve a Windows Known Folder via SHGetKnownFolderPath when elevated,
+    or use os.environ when overridden in unit tests."""
+    env_val = os.environ.get(env_name)
+    if env_val and not is_frozen():
+        return Path(env_val)
+    try:
+        shell32 = ctypes.windll.shell32
+        ole32 = ctypes.windll.ole32
+        out_ptr = ctypes.c_wchar_p()
+        hr = shell32.SHGetKnownFolderPath(guid_bytes, 0, None, ctypes.byref(out_ptr))
+        if hr == 0 and out_ptr.value:
+            resolved = Path(out_ptr.value)
+            ole32.CoTaskMemFree(out_ptr)
+            return resolved
+    except Exception:
+        pass
+    return Path(env_val or fallback)
+
+
+# FOLDERID_ProgramFilesX64 = {6D809377-6AF0-444B-8957-A3773F02200E}
+_GUID_PROGRAM_FILES = b"\x77\x93\x80\x6d\xf0\x6a\x4b\x44\x89\x57\xa3\x77\x3f\x02\x20\x0e"
+# FOLDERID_ProgramData = {62AB5D82-FDC1-4DC3-A9DD-070D1D495D97}
+_GUID_PROGRAM_DATA = b"\x82\x5d\xab\x62\xc1\xfd\xc3\x4d\xa9\xdd\x07\x0d\x1d\x49\x5d\x97"
+
+
 def program_files_dir() -> Path:
-    return Path(os.environ.get("ProgramFiles") or r"C:\Program Files")
+    return _known_folder(_GUID_PROGRAM_FILES, "ProgramFiles", r"C:\Program Files")
 
 
 def target_dir() -> Path:
@@ -122,16 +151,24 @@ def target_dir() -> Path:
 
 
 def setup_log_path() -> Path:
-    base = os.environ.get("ProgramData") or r"C:\ProgramData"
-    return Path(base) / PRODUCT_DIR_NAME / "cpu_temp_setup.log"
+    base = _known_folder(_GUID_PROGRAM_DATA, "ProgramData", r"C:\ProgramData")
+    return base / PRODUCT_DIR_NAME / "cpu_temp_setup.log"
 
 
 # ---------------------------------------------------------------- logging
 def log(message: str) -> None:
     """Run-mode log (data folder of the user), rotated at about 512 KB."""
     try:
-        os.makedirs(data_dir(), exist_ok=True)
+        folder = data_dir()
+        for candidate in (Path(folder).parent, Path(folder)):
+            if is_reparse_point(candidate):
+                return
+        os.makedirs(folder, exist_ok=True)
+        if is_reparse_point(folder):
+            return
         path = log_path()
+        if is_reparse_point(path) or is_reparse_point(path + ".1"):
+            return
         if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
             os.replace(path, path + ".1")
         with open(path, "a", encoding="utf-8") as handle:
@@ -145,7 +182,12 @@ def setup_log(message: str) -> None:
     """Install/uninstall log: one plain-English line each, in %ProgramData%."""
     path = setup_log_path()
     try:
+        for candidate in (path.parent.parent, path.parent):
+            if is_reparse_point(candidate):
+                return
         path.parent.mkdir(parents=True, exist_ok=True)
+        if is_reparse_point(path.parent) or is_reparse_point(path) or is_reparse_point(str(path) + ".1"):
+            return
         if path.exists() and path.stat().st_size > 512 * 1024:
             os.replace(path, str(path) + ".1")
         with open(path, "a", encoding="utf-8") as handle:
@@ -221,15 +263,25 @@ def read_temp(computer, sensor_type):
 
 
 def write(value, sensor):
-    os.makedirs(data_dir(), exist_ok=True)
+    folder = data_dir()
+    for candidate in (Path(folder).parent, Path(folder)):
+        if is_reparse_point(candidate):
+            raise OSError("Refusing to write CPU temperature through a reparse point: %s" % candidate)
+    os.makedirs(folder, exist_ok=True)
+    if is_reparse_point(folder):
+        raise OSError("Refusing to write CPU temperature into a reparse point folder: %s" % folder)
     target = out_path()
     tmp = target + ".tmp"
+    if is_reparse_point(target) or is_reparse_point(tmp):
+        raise OSError("Refusing to write CPU temperature to a reparse point file: %s" % target)
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump({"cpu_temp": value, "sensor": sensor, "time": time.time()}, handle)
     # The widget opens cpu_temp.json for reading; Windows refuses the swap while
     # that read is open, so retry briefly instead of dropping the reading.
     for attempt in range(10):
         try:
+            if is_reparse_point(target) or is_reparse_point(tmp):
+                raise OSError("Refusing to swap CPU temperature file across a reparse point.")
             os.replace(tmp, target)
             return
         except PermissionError:
@@ -306,9 +358,20 @@ def run_mode() -> int:
 
 
 # ================================================================ install / uninstall
-def schtasks_exe() -> str:
+def system32_dir() -> str:
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        length = ctypes.windll.kernel32.GetSystemDirectoryW(buf, 260)
+        if length > 0 and buf.value:
+            return buf.value
+    except Exception:
+        pass
     root = os.environ.get("SystemRoot") or r"C:\Windows"
-    return os.path.join(root, "System32", "schtasks.exe")
+    return os.path.join(root, "System32")
+
+
+def schtasks_exe() -> str:
+    return os.path.join(system32_dir(), "schtasks.exe")
 
 
 def current_user() -> str:
@@ -358,6 +421,7 @@ def copy_helper(source_dir, target, run=subprocess.run) -> Path:
     if not (source / HELPER_EXE_NAME).is_file():
         raise SetupError("%s was not found next to the installer step (%s), so there is "
                          "nothing to install." % (HELPER_EXE_NAME, source))
+    ensure_safe_target(source)
     ensure_safe_target(target)
     try:
         if os.path.normcase(os.path.realpath(source)) == os.path.normcase(os.path.realpath(target)):
@@ -369,7 +433,7 @@ def copy_helper(source_dir, target, run=subprocess.run) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             shutil.rmtree(target)
-        shutil.copytree(source, target, symlinks=True)
+        shutil.copytree(source, target, symlinks=False)
     except OSError as exc:
         raise SetupError("Could not copy the CPU temperature helper to %s: %s" % (target, exc))
     return target
@@ -408,8 +472,7 @@ def decide_pawnio(installed: bool, setup_path) -> tuple[str, int]:
     """What --install does about PawnIO: (action, value for PawnIOInstalledByUs).
 
     present  -> ("keep", 0)     never touch a driver somebody else installed
-    absent   -> ("install", 1)  run the setup we were given
-    absent and no setup exe -> ("missing", 0)
+    absent   -> ("install", 1)  run the setup we were given (or download the pinned release)
     """
     if installed:
         return "keep", 0
@@ -418,30 +481,104 @@ def decide_pawnio(installed: bool, setup_path) -> tuple[str, int]:
     return "missing", 0
 
 
-def install_pawnio(setup_path, run=subprocess.run) -> None:
-    """Run the PawnIO setup silently; raises SetupError if it fails."""
+def verify_pawnio_sha256(setup_path: str | Path,
+                         expected_sha256: str = EXPECTED_PAWNIO_SETUP_SHA256) -> str:
+    """Verify the SHA-256 of the PawnIO setup binary before executing it elevated."""
+    path = Path(setup_path)
+    if not path.is_file():
+        raise SetupError("The PawnIO setup file was not found: %s" % path)
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            hasher.update(chunk)
+    actual = hasher.hexdigest().lower()
+    if actual != expected_sha256.lower():
+        raise SetupError("The PawnIO setup file did not match the pinned SHA-256 checksum; "
+                         "refusing to run it.")
+    return actual
+
+
+def download_pawnio(dest_dir: Path, url: str = PAWNIO_SETUP_URL,
+                    expected_sha256: str = EXPECTED_PAWNIO_SETUP_SHA256) -> Path:
+    """Download the official pinned PawnIO setup into an admin-owned folder and check its SHA-256."""
+    import urllib.request
+    dest_dir = Path(dest_dir)
+    ensure_safe_target(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "PawnIO_setup.exe"
+    if not url.startswith("https://"):
+        raise SetupError("Refusing to download PawnIO over a non-HTTPS URL.")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "DesktopWidgets-CpuTempHelper/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = resp.read(20 * 1024 * 1024)
+        dest.write_bytes(data)
+    except Exception as exc:
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise SetupError("Could not download the PawnIO driver setup from GitHub: %s" % exc)
+    try:
+        verify_pawnio_sha256(dest, expected_sha256)
+    except Exception:
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return dest
+
+
+def install_pawnio(setup_path, run=subprocess.run, verify_hash: bool = False,
+                   staging_dir: Path | None = None) -> None:
+    """Run the PawnIO setup silently; raises SetupError if it fails.
+
+    When staging_dir is provided, the setup file is copied into that admin-writable
+    directory first and verified against EXPECTED_PAWNIO_SETUP_SHA256 before execution
+    to prevent a time-of-check/time-of-use swap in a user-writable folder.
+    """
     setup = str(setup_path)
     if not os.path.isfile(setup):
         raise SetupError("The PawnIO setup file was not found: %s" % setup)
+    staged = None
     try:
+        if staging_dir is not None:
+            staging_dir = Path(staging_dir)
+            ensure_safe_target(staging_dir)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            staged = staging_dir / "_pawnio_staged_setup.exe"
+            shutil.copy2(setup, staged)
+            setup = str(staged)
+        if verify_hash:
+            verify_pawnio_sha256(setup)
         result = run([setup, *PAWNIO_SETUP_ARGS], capture_output=True,
                      creationflags=CREATE_NO_WINDOW, timeout=SETUP_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         raise SetupError("The PawnIO driver setup did not finish within %d minutes."
                          % (SETUP_TIMEOUT_S // 60))
+    except SetupError:
+        raise
     except OSError as exc:
         raise SetupError("The PawnIO driver setup could not be started: %s" % exc)
+    finally:
+        if staged is not None:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                pass
     if result.returncode not in SETUP_EXIT_OK:
         raise SetupError("The PawnIO driver setup failed (exit code %s)." % result.returncode)
 
 
-def set_installed_by_us(value: int, registry=None) -> None:
+def set_installed_by_us(value: int, registry=None, installed: int = 1) -> None:
     registry = registry or winreg
     try:
         key = registry.CreateKeyEx(registry.HKEY_LOCAL_MACHINE, OWN_REG_KEY, 0,
                                    registry.KEY_SET_VALUE | getattr(registry, "KEY_WOW64_64KEY", 0))
         try:
             registry.SetValueEx(key, OWN_REG_VALUE, 0, registry.REG_DWORD, int(value))
+            registry.SetValueEx(key, OWN_INSTALLED_VALUE, 0, registry.REG_DWORD, int(installed))
         finally:
             registry.CloseKey(key)
     except OSError as exc:
@@ -571,6 +708,9 @@ def register_task(user: str, exe_path, run=subprocess.run, temp_dir=None) -> Non
     """Create (or replace) the scheduled task from generated XML."""
     import tempfile
     xml_text = build_task_xml(user, exe_path)
+    if temp_dir is not None:
+        ensure_safe_target(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
     handle, xml_file = tempfile.mkstemp(suffix=".xml", dir=temp_dir)
     os.close(handle)
     try:
@@ -626,13 +766,17 @@ def remove_install_dir(target, run=subprocess.run, popen=subprocess.Popen) -> No
             return
         except OSError as exc:
             setup_log("Deleting %s failed (%s); scheduling it for after this step." % (target, exc))
-    command = 'ping -n 4 127.0.0.1 >nul & rmdir /s /q "%s"' % target
-    popen(["cmd.exe", "/c", command], creationflags=CREATE_NO_WINDOW,
-          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    sys32 = system32_dir()
+    cmd_exe = os.path.join(sys32, "cmd.exe")
+    ping_exe = os.path.join(sys32, "ping.exe")
+    env = dict(os.environ, _DW_RMDIR_TARGET=str(target.resolve()), _DW_PING_EXE=ping_exe)
+    command = '"%_DW_PING_EXE%" -n 4 127.0.0.1 >nul & rmdir /s /q "%_DW_RMDIR_TARGET%"'
+    popen([cmd_exe, "/c", command], creationflags=CREATE_NO_WINDOW,
+          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, env=env)
 
 
 def do_install(user: str, pawnio_setup=None, source_dir=None, run=subprocess.run,
-               registry=None) -> None:
+               registry=None, allow_download: bool = False) -> None:
     """The whole --install, in order. Raises SetupError with a plain-English message."""
     registry = registry or winreg
     source = source_dir or (exe_dir() if is_frozen() else None)
@@ -641,21 +785,34 @@ def do_install(user: str, pawnio_setup=None, source_dir=None, run=subprocess.run
     target = copy_helper(source, target_dir(), run)
     setup_log("Copied the CPU temperature helper to %s" % target)
 
-    action, flag = decide_pawnio(pawnio_installed(registry), pawnio_setup)
-    if action == "install":
-        install_pawnio(pawnio_setup, run)
-        setup_log("Installed the PawnIO driver.")
-        if not pawnio_installed(registry):
-            setup_log("Note: PawnIO setup finished but Windows does not list it yet.")
-    elif action == "keep":
-        setup_log("PawnIO was already installed; leaving it as it is.")
-    else:
-        raise SetupError("The PawnIO driver is not installed and no setup file was given "
-                         "(--pawnio-setup), so CPU temperature cannot work.")
-    set_installed_by_us(flag, registry)
+    installed = pawnio_installed(registry)
+    downloaded_setup: Path | None = None
+    if not installed and not pawnio_setup and allow_download:
+        downloaded_setup = download_pawnio(target)
+        pawnio_setup = str(downloaded_setup)
 
-    register_task(user or current_user(), target / HELPER_EXE_NAME, run)
+    action, flag = decide_pawnio(installed, pawnio_setup)
+    try:
+        if action == "install":
+            install_pawnio(pawnio_setup, run, verify_hash=True, staging_dir=target)
+            setup_log("Installed the PawnIO driver.")
+            if not pawnio_installed(registry):
+                setup_log("Note: PawnIO setup finished but Windows does not list it yet.")
+        elif action == "keep":
+            setup_log("PawnIO was already installed; leaving it as it is.")
+        else:
+            raise SetupError("The PawnIO driver is not installed and no setup file was given "
+                             "(--pawnio-setup), so CPU temperature cannot work.")
+    finally:
+        if downloaded_setup is not None:
+            try:
+                downloaded_setup.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    register_task(user or current_user(), target / HELPER_EXE_NAME, run, temp_dir=target)
     setup_log("Registered the scheduled task '%s' for %s" % (TASK_NAME, user or current_user()))
+    set_installed_by_us(flag, registry)
     try:
         start_task(run)
     except SetupError as exc:
@@ -681,18 +838,27 @@ def parse_args(argv=None):
                       help="elevated, once: copy to Program Files, set up the driver and the task")
     mode.add_argument("--uninstall", action="store_true",
                       help="elevated: remove the task, the files and (if we added it) PawnIO")
+    mode.add_argument("--selftest", action="store_true",
+                      help="verify LibreHardwareMonitorLib.dll integrity and exit 0")
     parser.add_argument("--user", default="", help="DOMAIN\\name the task runs for")
     parser.add_argument("--pawnio-setup", default="", help="PawnIO setup exe to run if needed")
+    parser.add_argument("--download-pawnio", action="store_true",
+                        help="download the official pinned PawnIO setup if PawnIO is absent")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.selftest:
+        verify_dll_integrity()
+        print("CpuTempHelper selftest OK:", lhm_dll_path())
+        return 0
     if not (args.install or args.uninstall):
         return run_mode()
     try:
         if args.install:
-            do_install(args.user, args.pawnio_setup or None)
+            do_install(args.user, args.pawnio_setup or None,
+                       allow_download=bool(args.download_pawnio))
         else:
             do_uninstall()
         return 0

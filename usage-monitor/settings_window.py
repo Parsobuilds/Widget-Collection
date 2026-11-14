@@ -586,11 +586,13 @@ class SettingsWindow(QtWidgets.QDialog):
         settings: dict[str, str] = {}
         secrets: dict[str, str] = {}
         for spec in self._kind.fields:
-            text = self._text_of(self._inputs[spec.key]).strip()
+            raw = self._text_of(self._inputs[spec.key])
             if spec.kind == "secret":
-                secrets[spec.key] = self._text_of(self._inputs[spec.key])
+                secrets[spec.key] = raw
+            elif spec.key == "key_prefix":
+                settings[spec.key] = raw.lstrip()
             else:
-                settings[spec.key] = text
+                settings[spec.key] = raw.strip()
         return label, settings, secrets
 
     def _has_saved_secret(self) -> bool:
@@ -661,7 +663,7 @@ class SettingsWindow(QtWidgets.QDialog):
         if problem:
             self._say(problem, "bad")
             return
-        typed = next((v for v in secrets.values() if v.strip()), None)
+        typed = next((v.strip() for v in secrets.values() if v.strip()), None)
         instance_id = self._editing_id or TEST_ID
         instance = self._make_instance(instance_id, label, settings)
         self._testing = True

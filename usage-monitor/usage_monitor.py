@@ -2160,9 +2160,24 @@ def ensure_single_instance() -> QLocalServer | None:
     return server
 
 
+def purge_secrets() -> int:
+    """Delete all saved API keys for configured provider instances (used on uninstall)."""
+    try:
+        import secrets_store
+
+        cfg = provider_config.load_config()
+        ids = [inst.instance_id for inst in provider_config.list_instances(cfg)]
+        secrets_store.delete_all_secrets(ids, raise_on_error=True)
+    except Exception:
+        return 1
+    return 0
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return run_selftest()
+    if "--purge-secrets" in sys.argv:
+        return purge_secrets()
 
     set_process_dpi_awareness()
     app = QtWidgets.QApplication(sys.argv)

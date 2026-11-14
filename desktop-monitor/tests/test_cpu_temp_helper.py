@@ -213,8 +213,11 @@ class InstallUninstallFlowTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             commands.append(cmd)
             return done()
-        with mock.patch.object(helper, "install_pawnio",
-                               side_effect=lambda s, run=None: commands.append(["PAWNIO", s])):
+        with mock.patch.object(
+            helper,
+            "install_pawnio",
+            side_effect=lambda s, run=None, **kw: commands.append(["PAWNIO", s, kw.get("verify_hash")]),
+        ):
             helper.do_install("PC\\Alice", setup, source_dir=self.source, run=fake_run,
                               registry=registry)
         return commands
@@ -222,7 +225,7 @@ class InstallUninstallFlowTests(unittest.TestCase):
     def test_install_when_pawnio_absent(self):
         registry = FakeRegistry()
         commands = self.run_install(registry)
-        self.assertIn(["PAWNIO", "pawnio.exe"], commands)
+        self.assertIn(["PAWNIO", "pawnio.exe", True], commands)
         self.assertEqual(registry.keys[helper.OWN_REG_KEY.lower()][helper.OWN_REG_VALUE], 1)
         self.assertTrue((self.pf / "DesktopWidgets" / "CpuTempHelper" / helper.HELPER_EXE_NAME).is_file())
         self.assertTrue(any(c[1:2] == ["/Create"] for c in commands if c[0] != "PAWNIO"))
@@ -231,7 +234,7 @@ class InstallUninstallFlowTests(unittest.TestCase):
     def test_install_when_pawnio_present_does_not_touch_it(self):
         registry = FakeRegistry(PAWNIO_PRESENT)
         commands = self.run_install(registry)
-        self.assertNotIn(["PAWNIO", "pawnio.exe"], commands)
+        self.assertNotIn(["PAWNIO", "pawnio.exe", True], commands)
         self.assertEqual(registry.keys[helper.OWN_REG_KEY.lower()][helper.OWN_REG_VALUE], 0)
 
     def test_install_without_setup_exe_fails_clearly(self):
