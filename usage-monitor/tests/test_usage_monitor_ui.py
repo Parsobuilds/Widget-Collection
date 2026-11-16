@@ -233,5 +233,71 @@ class TestWidget(unittest.TestCase):
         self.assertEqual(w.config["favourites"], ["inst0001:session", "inst0002:primary"])
 
 
+class TestLinuxDragAndCorners(unittest.TestCase):
+    """Linux: drag from anywhere on the card (Wayland and X11); corners stay clear."""
+
+    def setUp(self) -> None:
+        patcher = mock.patch("usage_monitor.save_config")
+        self.save = patcher.start()
+        self.addCleanup(patcher.stop)
+        # Pretend to be Linux so the non-Windows branches run on any OS.
+        for patcher in (mock.patch.object(usage_monitor, "IS_WINDOWS", False),):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.w = usage_monitor.UsageMonitorWidget(dict(STATE), initial_rows=[])
+        self.addCleanup(self.w.close)
+
+    def mouse(self, kind, x: float, y: float, button=None):
+        from PySide6 import QtCore, QtGui
+        point = QtCore.QPointF(x, y)
+        buttons = QtCore.Qt.LeftButton if kind != QtCore.QEvent.MouseButtonRelease else QtCore.Qt.NoButton
+        return QtGui.QMouseEvent(kind, point, point, QtCore.Qt.LeftButton, buttons,
+                                 QtCore.Qt.NoModifier)
+
+    def test_wayland_drag_is_handed_to_the_compositor(self) -> None:
+        from PySide6 import QtCore
+        handle = mock.Mock()
+        with mock.patch.object(usage_monitor, "wayland_session", return_value=True), \
+                mock.patch.object(self.w, "windowHandle", return_value=handle):
+            self.w.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.w.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 80, 90))
+        handle.startSystemMove.assert_called_once_with()
+
+    def test_small_movement_is_still_a_click(self) -> None:
+        from PySide6 import QtCore
+        handle = mock.Mock()
+        with mock.patch.object(usage_monitor, "wayland_session", return_value=True), \
+                mock.patch.object(self.w, "windowHandle", return_value=handle):
+            self.w.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.w.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 52, 51))
+        handle.startSystemMove.assert_not_called()
+
+    def test_x11_drag_moves_the_card_and_saves_the_position(self) -> None:
+        from PySide6 import QtCore
+        start = self.w._pos
+        with mock.patch.object(usage_monitor, "wayland_session", return_value=False):
+            self.w.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.w.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 130, 150))
+            self.w.mouseReleaseEvent(self.mouse(QtCore.QEvent.MouseButtonRelease, 130, 150))
+        self.assertEqual(self.w._pos, (start[0] + 80, start[1] + 100))
+        self.save.assert_called()
+
+    def test_drag_can_be_switched_off(self) -> None:
+        from PySide6 import QtCore
+        self.w.config["drag_on_desktop"] = False
+        handle = mock.Mock()
+        with mock.patch.object(usage_monitor, "wayland_session", return_value=True), \
+                mock.patch.object(self.w, "windowHandle", return_value=handle):
+            self.w.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.w.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 120, 120))
+        handle.startSystemMove.assert_not_called()
+
+    def test_corners_are_transparent(self) -> None:
+        image = self.w.grab().toImage()
+        # The very corner pixel lies outside the rounded card, so it must not be
+        # an opaque black square.
+        self.assertLess(image.pixelColor(0, 0).alpha(), 40)
+
+
 if __name__ == "__main__":
     unittest.main()

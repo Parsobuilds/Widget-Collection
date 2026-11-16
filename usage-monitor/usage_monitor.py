@@ -344,6 +344,15 @@ def save_config(config: dict) -> None:
         log_line(f"config save failed: {exc}")
 
 
+def wayland_session() -> bool:
+    """True when Qt runs on Wayland, where an app may not move its own window.
+
+    On Wayland the only way to move a window is to ask the compositor to do it
+    with QWindow.startSystemMove(); QWidget.move() is silently ignored.
+    """
+    return QtGui.QGuiApplication.platformName().startswith("wayland")
+
+
 def move_mode(config: dict) -> bool:
     """True when the card is unlocked for top-level dragging."""
     return not bool(config.get("locked", True))
@@ -828,6 +837,7 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         self._zones: list[tuple[QRectF, str]] = []
         self._press = None
         self._grab = None
+        self._dragged = False      # a real drag happened since the last press (Linux)
         self._resizing = False
         self._pending_resize = None
         # Menu shown on right-click (set by main(); used on Linux, where there may be no tray).
@@ -1125,14 +1135,38 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 event.position().x(),
                 event.position().y(),
             )
-            if move_mode(self.config):
+            self._dragged = False
+            if move_mode(self.config) or not IS_WINDOWS:
                 self._grab = (
                     event.globalPosition().x() - self._pos[0],
                     event.globalPosition().y() - self._pos[1],
                 )
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if not move_mode(self.config) or self._grab is None:
+        if self._grab is None:
+            return
+        if not IS_WINDOWS:
+            # Linux: drag from anywhere on the card, locked or not. A press that
+            # has not travelled more than 4 px is still a click on a button.
+            if not self.config.get("drag_on_desktop", True) and not move_mode(self.config):
+                return
+            press = self._press
+            if press is not None and (
+                abs(event.globalPosition().x() - press[0])
+                + abs(event.globalPosition().y() - press[1])
+                <= 4
+            ):
+                return
+            if wayland_session():
+                # Hand the drag to the compositor; it sends no release event to us.
+                self._press = None
+                self._grab = None
+                handle = self.windowHandle()
+                if handle is not None:
+                    handle.startSystemMove()
+                return
+            self._dragged = True
+        elif not move_mode(self.config):
             return
         x = int(event.globalPosition().x() - self._grab[0])
         y = int(event.globalPosition().y() - self._grab[1])
@@ -1154,7 +1188,7 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 zone = self.zone_at(press[2], press[3])
                 if zone:
                     self.handle_zone(zone)
-            if move_mode(self.config):
+            if move_mode(self.config) or (not IS_WINDOWS and self._dragged):
                 self.config["x"], self.config["y"] = self._pos
                 save_config(self.config)
 
@@ -1347,6 +1381,12 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         path = QPainterPath()
         path.addRoundedRect(body, CORNER_RADIUS, CORNER_RADIUS)
 
+        if not IS_WINDOWS:
+            # The window is translucent here (Windows clips it with a region
+            # instead), so keep the background inside the rounded body or the
+            # corners show as black squares.
+            painter.save()
+            painter.setClipPath(path)
         bg = self.refresh_blur()
         if bg is not None:
             if self._resizing:
@@ -1355,6 +1395,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 painter.drawPixmap(0, 0, bg)
         else:
             painter.fillRect(QRect(0, 0, self.width(), self.height()), QColor(C_CARD))
+        if not IS_WINDOWS:
+            painter.restore()
 
         overlay = QColor(C_OVERLAY)
         eff_opacity = (

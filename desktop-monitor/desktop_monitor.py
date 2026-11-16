@@ -337,6 +337,15 @@ DEFAULT_CONFIG = {
 }
 
 
+def wayland_session() -> bool:
+    """True when Qt runs on Wayland, where an app may not move its own window.
+
+    On Wayland the only way to move a window is to ask the compositor to do it
+    with QWindow.startSystemMove(); QWidget.move() is silently ignored.
+    """
+    return QtGui.QGuiApplication.platformName().startswith("wayland")
+
+
 def move_mode(config: dict) -> bool:
     """True when the card is detached from the desktop layer and draggable."""
     return not bool(config.get("locked", True))
@@ -1780,6 +1789,7 @@ class MonitorWidget(QtWidgets.QWidget):
         self._zones = []                  # (QRectF, name) clickable areas, set in paint
         self._log_rows = read_stats_log()
         self._press = None                # Move mode: press point, for click detection
+        self._dragged = False             # a real drag happened since the last press (Linux)
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool
                             | Qt.WindowDoesNotAcceptFocus)
@@ -2688,13 +2698,35 @@ class MonitorWidget(QtWidgets.QWidget):
             return          # Windows locked: the desktop hook delivers clicks
         if event.button() == Qt.LeftButton:
             self._drag_delta = None
+            self._dragged = False
             self._press = (event.globalPosition().x(), event.globalPosition().y(),
                            event.position().x(), event.position().y())
             self._grab = (event.globalPosition().x() - self._pos[0],
                           event.globalPosition().y() - self._pos[1])
 
     def mouseMoveEvent(self, event):
-        if not move_mode(self.config) or getattr(self, "_grab", None) is None:
+        if getattr(self, "_grab", None) is None:
+            return
+        if IS_LINUX:
+            # Linux: drag from anywhere on the card, locked or not. A press that
+            # has not travelled more than 4 px is still a click on a button.
+            if not self.config.get("drag_on_desktop", True) and not move_mode(self.config):
+                return
+            press = self._press
+            if press is not None and (abs(event.globalPosition().x() - press[0])
+                                      + abs(event.globalPosition().y() - press[1])) <= 4:
+                return
+            if wayland_session():
+                # Wayland ignores QWidget.move(): ask the compositor to move the
+                # window. It sends no release event to us afterwards.
+                self._press = None
+                self._grab = None
+                handle = self.windowHandle()
+                if handle is not None:
+                    handle.startSystemMove()
+                return
+            self._dragged = True
+        elif not move_mode(self.config):
             return
         x = int(event.globalPosition().x() - self._grab[0])
         y = int(event.globalPosition().y() - self._grab[1])
@@ -2713,7 +2745,7 @@ class MonitorWidget(QtWidgets.QWidget):
                 zone = self.zone_at(press[2], press[3])
                 if zone:
                     self.handle_zone(zone)
-            if IS_LINUX and not move_mode(self.config):
+            if IS_LINUX and not move_mode(self.config) and not self._dragged:
                 return          # locked: a click never moved the card, nothing to save
             self.config["x"], self.config["y"] = self._pos
             save_config(self.config)

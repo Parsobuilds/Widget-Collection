@@ -325,6 +325,66 @@ class LinuxAutostartTests(unittest.TestCase):
         self.assertNotIn("Start with Windows", labels)
 
 
+class LinuxDragTests(unittest.TestCase):
+    """Left-drag moves the card on Linux, locked or not (Wayland and X11)."""
+
+    def setUp(self):
+        for patcher in (mock.patch.object(dm, "IS_LINUX", True),
+                        mock.patch.object(dm, "save_config")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        support.qapp()
+        self.widget = dm.MonitorWidget(dm.normalise_config(dm.load_config()))
+        self.addCleanup(self.widget.close)
+
+    @staticmethod
+    def mouse(kind, x, y):
+        from PySide6 import QtCore, QtGui
+        point = QtCore.QPointF(x, y)
+        buttons = QtCore.Qt.NoButton if kind == QtCore.QEvent.MouseButtonRelease else QtCore.Qt.LeftButton
+        return QtGui.QMouseEvent(kind, point, point, QtCore.Qt.LeftButton, buttons,
+                                 QtCore.Qt.NoModifier)
+
+    def test_wayland_drag_is_handed_to_the_compositor(self):
+        from PySide6 import QtCore
+        handle = mock.Mock()
+        with mock.patch.object(dm, "wayland_session", return_value=True), \
+                mock.patch.object(self.widget, "windowHandle", return_value=handle):
+            self.widget.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.widget.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 90, 90))
+        handle.startSystemMove.assert_called_once_with()
+
+    def test_small_movement_is_still_a_click(self):
+        from PySide6 import QtCore
+        handle = mock.Mock()
+        with mock.patch.object(dm, "wayland_session", return_value=True), \
+                mock.patch.object(self.widget, "windowHandle", return_value=handle):
+            self.widget.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.widget.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 52, 51))
+        handle.startSystemMove.assert_not_called()
+
+    def test_x11_drag_moves_the_locked_card_and_saves(self):
+        from PySide6 import QtCore
+        start = self.widget._pos
+        self.assertFalse(dm.move_mode(self.widget.config))        # default: locked
+        with mock.patch.object(dm, "wayland_session", return_value=False):
+            self.widget.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.widget.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 130, 150))
+            self.widget.mouseReleaseEvent(self.mouse(QtCore.QEvent.MouseButtonRelease, 130, 150))
+        self.assertEqual(self.widget._pos, (start[0] + 80, start[1] + 100))
+        dm.save_config.assert_called()
+
+    def test_drag_can_be_switched_off(self):
+        from PySide6 import QtCore
+        self.widget.config["drag_on_desktop"] = False
+        handle = mock.Mock()
+        with mock.patch.object(dm, "wayland_session", return_value=True), \
+                mock.patch.object(self.widget, "windowHandle", return_value=handle):
+            self.widget.mousePressEvent(self.mouse(QtCore.QEvent.MouseButtonPress, 50, 50))
+            self.widget.mouseMoveEvent(self.mouse(QtCore.QEvent.MouseMove, 120, 120))
+        handle.startSystemMove.assert_not_called()
+
+
 @unittest.skipUnless(ON_LINUX, "fcntl.flock needs Linux")
 class LinuxLockTests(unittest.TestCase):
     def test_second_instance_is_refused_until_the_first_closes(self):
