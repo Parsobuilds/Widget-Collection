@@ -647,6 +647,22 @@ def custom_bg_settings():
         return None
 
 
+def save_background_config(updates: dict) -> None:
+    """Merge ``updates`` into the shared widget_background.json (read by all three widgets)."""
+    source = background_config_path()
+    data: dict = {}
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8-sig"))
+        if isinstance(raw, dict):
+            data = raw
+    except (OSError, ValueError):
+        pass
+    data.update(updates)
+    target = BG_CONFIG_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def build_blur_rect(monitor_rect, card_rect, settings, dpr: float, custom_bg=None):
     """Build frosted-glass background QPixmap matching Desktop Monitor."""
     path, style, tile, _mtime = settings
@@ -1194,8 +1210,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 save_config(self.config)
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
-        """Right-click on the card shows the same menu as the tray icon (Linux only)."""
-        if not IS_WINDOWS and self.context_menu is not None:
+        """Right-click on the card shows the same menu as the tray icon."""
+        if self.context_menu is not None:
             self.context_menu.popup(event.globalPos())
             event.accept()
 
@@ -2305,7 +2321,15 @@ def show_settings(widget: "UsageMonitorWidget", worker: "CollectorWorker"):
             widget.update()
             QtCore.QMetaObject.invokeMethod(worker, "force_poll", Qt.QueuedConnection)
 
+        def _background(path: str) -> None:
+            if path and not os.path.isfile(path):
+                return
+            save_background_config({"image_path": path})
+            widget.refresh_blur(force=True)
+            widget.update()
+
         window.providers_changed.connect(_changed)
+        window.background_chosen.connect(_background)
         window._usage_monitor_wired = True
     return window
 
@@ -2318,7 +2342,7 @@ def build_menu(
     worker: CollectorWorker,
     stop_callback: Callable[[], None],
 ) -> QtWidgets.QMenu:
-    """Build the menu: Settings / Move / Lock / Refresh / Opacity / autostart / Quit.
+    """Build the menu: Settings / Move / Lock / Refresh / Opacity / Background / autostart / Quit.
 
     The tray icon shows it, and on Linux a right-click on the card shows it too
     (some desktops have no tray).
@@ -2378,6 +2402,33 @@ def build_menu(
 
         act.triggered.connect(_set_op)
         opacity_group.addAction(act)
+
+    background_menu = menu.addMenu("Background")
+    choose_bg_action = background_menu.addAction("Change background image...")
+    reset_bg_action = background_menu.addAction("Reset to desktop wallpaper")
+
+    def _choose_background(_checked: bool = False) -> None:
+        pictures = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.PicturesLocation
+        )
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            None,
+            "Choose Widget Background Image",
+            pictures,
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+        )
+        if path and os.path.isfile(path):
+            save_background_config({"image_path": path})
+            widget.refresh_blur(force=True)
+            widget.update()
+
+    def _reset_background(_checked: bool = False) -> None:
+        save_background_config({"image_path": ""})
+        widget.refresh_blur(force=True)
+        widget.update()
+
+    choose_bg_action.triggered.connect(_choose_background)
+    reset_bg_action.triggered.connect(_reset_background)
 
     menu.addSeparator()
     autostart_action = menu.addAction(AUTOSTART_LABEL)

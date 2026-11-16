@@ -211,6 +211,8 @@ class SettingsWindow(QtWidgets.QDialog):
     """List, add, edit, test, switch and remove usage providers."""
 
     providers_changed = QtCore.Signal()
+    # Emits the chosen image path, or "" to go back to the desktop wallpaper.
+    background_chosen = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None,
                  config_path: Path | None = None) -> None:
@@ -289,6 +291,17 @@ class SettingsWindow(QtWidgets.QDialog):
         scroll.setWidget(self._list_host)
         lay.addWidget(scroll, 1)
 
+        bg_row = QtWidgets.QHBoxLayout()
+        bg_row.addWidget(_label("Card background", "muted", wrap=False))
+        bg_row.addStretch(1)
+        self._bg_choose_btn = _button("Change background...")
+        self._bg_choose_btn.clicked.connect(self._choose_background)
+        self._bg_reset_btn = _button("Reset")
+        self._bg_reset_btn.clicked.connect(lambda: self.background_chosen.emit(""))
+        bg_row.addWidget(self._bg_choose_btn)
+        bg_row.addWidget(self._bg_reset_btn)
+        lay.addLayout(bg_row)
+
         foot = QtWidgets.QHBoxLayout()
         self._add_btn = _button("Add a provider", primary=True)
         self._add_btn.clicked.connect(self.start_add)
@@ -299,6 +312,16 @@ class SettingsWindow(QtWidgets.QDialog):
         foot.addWidget(close_btn)
         lay.addLayout(foot)
         return page
+
+    def _choose_background(self) -> None:
+        """Pick an image for the card background (shared with the other widgets)."""
+        pictures = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.PicturesLocation)
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Choose Widget Background Image", pictures,
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if path:
+            self.background_chosen.emit(path)
 
     def _kind_name(self, kind_id: str) -> str:
         kind = registry.get_kind(kind_id) if registry is not None else None

@@ -7,6 +7,7 @@ touches the real user profile or the network.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -62,6 +63,21 @@ class TestPaths(unittest.TestCase):
         finally:
             legacy.unlink(missing_ok=True)
             usage_monitor.BG_CONFIG_PATH.unlink(missing_ok=True)
+
+    def test_save_background_config_merges_and_resets(self) -> None:
+        target = usage_monitor.BG_CONFIG_PATH
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"blur_radius": 12.0}', encoding="utf-8")
+        try:
+            usage_monitor.save_background_config({"image_path": "C:/pics/a.png"})
+            saved = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(saved, {"blur_radius": 12.0, "image_path": "C:/pics/a.png"})
+            usage_monitor.save_background_config({"image_path": ""})
+            saved = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(saved["image_path"], "")
+            self.assertEqual(saved["blur_radius"], 12.0)
+        finally:
+            target.unlink(missing_ok=True)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows exe path")
     def test_autostart_command_frozen_uses_exe(self) -> None:

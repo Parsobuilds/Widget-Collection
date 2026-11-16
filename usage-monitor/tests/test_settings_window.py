@@ -238,6 +238,19 @@ class SettingsWindowTests(unittest.TestCase):
     def _bump(self) -> None:
         self.changed += 1
 
+    def test_background_buttons_emit_path_or_reset(self) -> None:
+        win = self.make()
+        got: list[str] = []
+        win.background_chosen.connect(got.append)
+        with mock.patch.object(QtWidgets.QFileDialog, "getOpenFileName",
+                               return_value=("C:/pics/a.png", "")):
+            win._bg_choose_btn.click()
+        win._bg_reset_btn.click()
+        with mock.patch.object(QtWidgets.QFileDialog, "getOpenFileName",
+                               return_value=("", "")):
+            win._bg_choose_btn.click()
+        self.assertEqual(got, ["C:/pics/a.png", ""])
+
     def seed_two(self) -> None:
         self.config.disk["providers"] = [
             {"instance_id": "aaaa1111", "kind": "signin_a", "label": "Work account",
