@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
@@ -46,6 +47,47 @@ class TempDirTestCase(unittest.TestCase):
 
     def make_goal(self, title: str = "Learn to stream", **kwargs) -> Goal:
         return self.mgr.add_goal(title, **kwargs)
+
+
+class GoalPriorityTests(TempDirTestCase):
+    def test_finish_preserves_history_and_undo(self) -> None:
+        self.mgr.add_goal("Done", goal_id="done")
+        self.mgr.add_step("done", "Finish it")
+        self.mgr.set_step_done("done", 1)
+        self.mgr.finish_goal("done")
+        goal = self.mgr.load_goals()[0]
+        self.assertEqual(goal.status, "done")
+        self.assertTrue(goal.steps[0].done)
+        self.assertTrue(self.mgr.undo_last_change())
+        self.assertEqual(self.mgr.load_goals()[0].status, "active")
+
+    def test_unfinished_or_empty_goal_cannot_be_removed(self) -> None:
+        self.mgr.add_goal("Work", goal_id="work")
+        with self.assertRaises(ValueError):
+            self.mgr.finish_goal("work")
+        self.mgr.add_step("work", "Not done")
+        with self.assertRaises(ValueError):
+            self.mgr.finish_goal("work")
+
+    def test_reorder_persists_and_appends_concurrent_additions(self) -> None:
+        for key in ("first", "second", "new"):
+            self.mgr.add_goal(key, goal_id=key)
+            self.mgr.add_step(key, "Do something")
+        old_touched = {g.id: g.last_touched for g in self.mgr.load_goals()}
+        self.mgr.reorder_goals(["second", "first"])
+        ordered = sorted(self.mgr.load_goals(), key=lambda g: g.priority)
+        self.assertEqual([g.id for g in ordered], ["second", "first", "new"])
+        self.assertEqual([g.priority for g in ordered], [1, 2, 3])
+        self.assertEqual({g.id: g.last_touched for g in ordered}, old_touched)
+        self.assertEqual(todays_focus(ordered)[0].id, "second")
+
+    def test_bad_orders_do_not_write(self) -> None:
+        self.mgr.add_goal("First", goal_id="first")
+        before = Path(self.goals_path).read_bytes()
+        for order in (None, "first", ["first", "first"], ["missing"], [1]):
+            with self.assertRaises(ValueError):
+                self.mgr.reorder_goals(order)
+            self.assertEqual(Path(self.goals_path).read_bytes(), before)
 
 
 class GoalAndStepTests(TempDirTestCase):

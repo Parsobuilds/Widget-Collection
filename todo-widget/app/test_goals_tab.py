@@ -61,6 +61,35 @@ class GoalsTabTests(unittest.TestCase):
         with open(self.goals_path, encoding="utf-8") as handle:
             return {goal["id"]: goal for goal in json.load(handle)["goals"]}
 
+    def test_finished_button_hides_card_but_keeps_record(self) -> None:
+        manager = self.panel.goals_manager
+        manager.set_step_done("garage", 1)
+        self.panel.refresh()
+        card = next(card for card in self.panel.cards if card.goal.id == "garage")
+        card.finish_button.click()
+        self.assertEqual([card.goal.id for card in self.panel.cards], ["streaming"])
+        self.assertEqual(self._read_goals()["garage"]["status"], "done")
+
+
+    def test_drag_drop_updates_priorities_and_focus(self) -> None:
+        from PySide6 import QtCore, QtGui
+        self.widget.show_tab("goals")
+        self.widget.show()
+        APP.processEvents()
+        mime = QtCore.QMimeData()
+        mime.setData(goals_tab.GOAL_MIME_TYPE, b"garage")
+        drop = QtGui.QDropEvent(QtCore.QPointF(5, 0), QtCore.Qt.DropAction.MoveAction,
+                               mime, QtCore.Qt.MouseButton.LeftButton,
+                               QtCore.Qt.KeyboardModifier.NoModifier)
+        self.panel.card_container.dropEvent(drop)
+        APP.processEvents()
+        self.assertTrue(drop.isAccepted())
+        self.assertEqual([card.goal.id for card in self.panel.cards], ["garage", "streaming"])
+        self.assertEqual(self._read_goals()["garage"]["priority"], 1)
+        self.assertIn("Clear one shelf", self.panel.lbl_focus_step.text())
+        self.widget.hide()
+
+
     def test_tab_switch_is_remembered(self) -> None:
         self.widget.show_tab("goals")
         self.assertEqual(self.widget.pages.currentWidget(), self.panel)

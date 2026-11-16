@@ -44,7 +44,7 @@ usage, usage_exe = widget(
     ["provider_config", "secrets_store", "settings_window", "cache", "models",
      "providers", "providers.base", "providers.registry", "providers._t3db",
      "providers.claude_code", "providers.codex", "providers.antigravity",
-     "providers.nanogpt", "providers.openrouter", "providers.deepseek",
+     "providers.nanogpt", "providers.nanogpt_sub", "providers.openrouter", "providers.deepseek",
      "providers.google_ai_studio_t3", "providers.custom_json",
      "providers.manual_budget"] + KEYRING_LINUX,
     [],

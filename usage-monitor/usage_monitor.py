@@ -81,6 +81,7 @@ from models import (
     CreditRow,
     UsageRow,
     build_credit_rows,
+    ProviderSummary, build_provider_summaries, model_display_row, is_compact_row, uses_inline_metrics,
     format_reset_countdown,
 )
 from providers import registry
@@ -117,6 +118,7 @@ TAB_H = 22
 HEADER_H = 18
 SECTION_H = 16
 MODEL_ROW_H = 27
+COMPACT_ROW_H = SECTION_H + 2
 CREDIT_CARD_H = 68
 GAP = 8
 
@@ -1415,7 +1417,10 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             for r in self._rows:
                 grouped.setdefault(r.provider_id, []).append(r)
             for p_rows in grouped.values():
-                total_h += SECTION_H + len(p_rows) * MODEL_ROW_H + 4
+                summary = build_provider_summaries(p_rows)[0]
+                total_h += self._provider_header_height(summary) + 4
+                total_h += sum(COMPACT_ROW_H if is_compact_row(model_display_row(row, summary))
+                               or uses_inline_metrics(row) else MODEL_ROW_H for row in p_rows)
         self._max_scroll_y = max(0, int(total_h - viewport_h + 8))
         self._scroll_y = max(0, min(self._scroll_y, self._max_scroll_y))
 
@@ -1491,11 +1496,11 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             btn_right = right - rw - 12
             dn_rect = QRectF(btn_right - 18, y + 1, 18, HEADER_H - 2)
             up_rect = QRectF(btn_right - 39, y + 1, 18, HEADER_H - 2)
-            self._pill(painter, up_rect, "▲", self._scroll_y > 0, zone="scroll_up")
+            self._pill(painter, up_rect, "â–²", self._scroll_y > 0, zone="scroll_up")
             self._pill(
                 painter,
                 dn_rect,
-                "▼",
+                "â–¼",
                 self._scroll_y < self._max_scroll_y,
                 zone="scroll_down",
             )
@@ -1507,6 +1512,7 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         y: float,
         row: UsageRow,
         show_reorder: bool = False,
+        compact: bool = False,
     ) -> float:
         """Render a single model row: name, bar, percent used (5h & 7d), reset time, and star."""
         left, right = float(self._left()), float(self._right())
@@ -1514,7 +1520,9 @@ class UsageMonitorWidget(QtWidgets.QWidget):
 
         # Star button at row end
         star_x = right - 13
-        star_rect = QRectF(star_x - 2, y, 17, MODEL_ROW_H - 2)
+        inline = uses_inline_metrics(row) and not show_reorder
+        row_height = COMPACT_ROW_H if compact or inline else MODEL_ROW_H
+        star_rect = QRectF(star_x - 2, y, 17, row_height - 2)
         self._text(
             painter,
             right,
@@ -1528,7 +1536,7 @@ class UsageMonitorWidget(QtWidgets.QWidget):
 
         content_right = star_x - 4
         if show_reorder:
-            # Small up / down buttons on the FAVOURITES tab to reorder starred rows
+            # Small ↑ / ↓ buttons on FAVOURITES tab to customize Tom's order
             up_rect = QRectF(content_right - 26, y + 1, 12, 14)
             dn_rect = QRectF(content_right - 13, y + 1, 12, 14)
             self._text(painter, up_rect.left() + 2, y + 11, "↑", qt_font(8, True), C_LABEL)
@@ -1537,30 +1545,55 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             self._zones.append((dn_rect, f"down:{row.star_key}"))
             content_right -= 30
 
+        if inline:
+            # Keep each quota independent while fitting it on one short line.
+            countdown = format_reset_countdown(row.resets_at) or row.reset_text
+            countdown = countdown.replace("resets in ", "").replace(" ", "")
+            percent = f"{row.percent_used:.0f}%" if row.percent_used is not None else "no data"
+            note = f"{percent} {countdown}".strip()
+            note_width = self._text(
+                painter, content_right, y + 11, note, qt_font(6.5),
+                bar_color(row.percent_used) if row.percent_used is not None else C_LABEL,
+                align_right=True, max_width=102,
+            )
+            gauge_x = content_right - note_width - 30
+            if row.percent_used is not None:
+                self._draw_bar(painter, gauge_x, y + 7, 24, row.percent_used)
+            self._text(painter, left, y + 11, row.model_label, qt_font(8, True),
+                       C_VALUE, max_width=gauge_x - left - 5)
+            return y + COMPACT_ROW_H
+
+        if compact:
+            self._text(painter, left, y + 11, row.model_label, qt_font(8, True),
+                       C_VALUE, max_width=content_right - left)
+            return y + COMPACT_ROW_H
+
         # Right side of top line: explicit 5h + 7d (weekly) limits & reset time
         pct = row.percent_used
-        if pct is not None and row.status not in ("no_data", "error"):
-            pct_str = f"{pct:.0f}%"
+        if pct is not None and row.status != "no_data":
+            if show_reorder and row.provider_kind in ("claude_code", "codex"):
+                pct_str = f"5h {pct:.0f}%"
+            elif row.provider_kind == "nanogpt_sub":
+                pct_str = f"{pct:g}%"
+            else:
+                pct_str = f"{pct:.0f}%"
             pct_col = bar_color(pct)
         else:
-            pct_str = "no data"
+            pct_str = "" if row.credit_balance_usd is not None and row.reason else "no data"
             pct_col = QColor(C_LABEL)
 
         reset_note = row.display_reset_Or_reason()
-        if row.status == "error":
-            right_label = row.reason or "Could not read usage"
-            pct_col = QColor(C_RED)
-            pct = None
-        elif reset_note and reset_note != "no data" and pct is None:
-            right_label = reset_note
-        elif reset_note and reset_note != "no data":
+        if not show_reorder and row.secondary_label.startswith("7d "):
+            pct_str = row.secondary_label
+            reset_note = row.reset_text
+        if reset_note and reset_note != "no data":
             # Compact 'resets in 4h 21m' to '4h 21m' when both 5h and 7d limits are shown
             compact_note = (
                 reset_note.replace("resets in ", "↻ ")
                 if row.secondary_label
                 else reset_note
             )
-            right_label = f"{pct_str} · {compact_note}".strip()
+            right_label = " · ".join(part for part in (pct_str, compact_note) if part)
         else:
             right_label = pct_str
 
@@ -1576,7 +1609,7 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             y + 11,
             right_label,
             right_font,
-            pct_col if (pct is not None or row.status == "error") else C_LABEL,
+            pct_col if pct is not None else C_LABEL,
             align_right=True,
             max_width=min(max_rw, max(desired_rw + 2, 128.0)),
         )
@@ -1593,8 +1626,9 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         )
 
         # Bottom line of row: thin rounded progress bar across content width
-        self._draw_bar(painter, left, y + 16, content_right - left, pct)
-        return y + MODEL_ROW_H
+        if pct is not None:
+            self._draw_bar(painter, left, y + 16, content_right - left, pct)
+        return y + row_height
 
     def _draw_empty_state(self, painter: QPainter, y_top: float) -> bool:
         """Draw the first-run message and button. Returns True when it was drawn."""
@@ -1628,6 +1662,48 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         self._zones.append((button, "settings"))
         return True
 
+    @staticmethod
+    def _provider_header_height(summary: ProviderSummary) -> int:
+        has_bar = summary.primary_percent is not None or summary.secondary_percent is not None
+        shared_detail = summary.detail and (
+            summary.status != "ok"
+        )
+        return SECTION_H + (10 if has_bar else 0) + (12 if shared_detail else 0)
+
+    def _draw_provider_header(
+        self, painter: QPainter, y: float, summary: ProviderSummary,
+    ) -> None:
+        """Draw shared provider windows once."""
+        left, right = float(self._left()), float(self._right())
+        labels = [summary.primary_label, summary.secondary_label]
+        countdown = format_reset_countdown(summary.resets_at) or summary.reset_text
+        if countdown:
+            labels.append(countdown.replace("resets in ", "↻ "))
+        reading = " · ".join(label for label in labels if label)
+        if not reading and summary.status != "ok":
+            reading = summary.status.replace("_", " ")
+        name_width = self._text(
+            painter, left, y + 11, summary.provider_label,
+            qt_font(8, True), C_LABEL,
+            max_width=(right - left) * (0.42 if reading else 1),
+        )
+        self._text(
+            painter, right, y + 11, reading, qt_font(7),
+            C_AMBER if summary.status != "ok" else C_TEXT2,
+            align_right=True, max_width=right - left - name_width - 6,
+        )
+        values = [value for value in (summary.primary_percent, summary.secondary_percent)
+                  if value is not None]
+        if values:
+            width = (right - left - 6 * (len(values) - 1)) / len(values)
+            for index, value in enumerate(values):
+                self._draw_bar(painter, left + index * (width + 6), y + 15, width, value)
+        if summary.detail and (
+            summary.status != "ok"
+        ):
+            self._text(painter, left, y + self._provider_header_height(summary) - 3,
+                       summary.detail, qt_font(7), C_TEXT2, max_width=right - left)
+
     def _draw_all_tab(self, painter: QPainter, y_top: float) -> None:
         left = float(self._left())
         bottom_limit = float(self.height() - EDGE_PAD + 4)
@@ -1644,16 +1720,20 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         painter.setClipRect(QRectF(0, y_top, self.width(), viewport_h))
 
         cur_y = y_top - self._scroll_y
-        label_font = qt_font(8, True, 1.0)
-        for p_rows in grouped.values():
-            provider_label = p_rows[0].provider_label
-            if cur_y + SECTION_H >= y_top - 20 and cur_y <= bottom_limit:
-                self._text(painter, left, cur_y + 11, provider_label, label_font, C_LABEL)
-            cur_y += SECTION_H
+        summaries = {item.provider_id: item for item in build_provider_summaries(self._rows)}
+        for provider_id, p_rows in grouped.items():
+            summary = summaries[provider_id]
+            height = self._provider_header_height(summary)
+            if cur_y + height >= y_top and cur_y <= bottom_limit:
+                self._draw_provider_header(painter, cur_y, summary)
+            cur_y += height
             for row in p_rows:
-                if cur_y + MODEL_ROW_H >= y_top and cur_y <= bottom_limit:
-                    self._draw_model_row(painter, cur_y, row, show_reorder=False)
-                cur_y += MODEL_ROW_H
+                display = model_display_row(row, summary)
+                compact = is_compact_row(display) or uses_inline_metrics(display)
+                row_height = COMPACT_ROW_H if compact else MODEL_ROW_H
+                if cur_y + row_height >= y_top and cur_y <= bottom_limit:
+                    self._draw_model_row(painter, cur_y, display, compact=compact)
+                cur_y += row_height
             cur_y += 4
 
         painter.restore()

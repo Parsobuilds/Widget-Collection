@@ -556,6 +556,45 @@ class GoalsManager:
 
     # -- changing goals -----------------------------------------------------
 
+    def finish_goal(self, goal_id: str) -> Goal:
+        """Remove a completed card from view, keeping its notes and undo history."""
+        goals = self.load_goals()
+        goal = self._find(goals, goal_id)
+        if goal.status == "done":
+            return goal
+        if not goal.steps or not all(step.done for step in goal.steps):
+            raise ValueError("Finish every milestone before removing this goal.")
+        goal.status = "done"
+        self._commit(goals, goal)
+        return goal
+
+
+    def reorder_goals(self, goal_ids: list[str]) -> list[Goal]:
+        """Save visible priorities together; retain goals added during a drag."""
+        if not isinstance(goal_ids, list) or any(
+                not isinstance(key, str) for key in goal_ids):
+            raise ValueError("Goal order must be a list of goal ids.")
+        if len(set(goal_ids)) != len(goal_ids):
+            raise ValueError("Goal order contains duplicates.")
+        goals = self.load_goals()
+        visible = sorted((goal for goal in goals if goal.status != "done"),
+                         key=lambda goal: (goal.priority, goal.created, goal.id))
+        by_id = {goal.id: goal for goal in visible}
+        if any(key not in by_id for key in goal_ids):
+            raise ValueError("A goal changed or was removed. Refresh the list.")
+        order = goal_ids + [goal.id for goal in visible if goal.id not in goal_ids]
+        changed = False
+        for priority, key in enumerate(order, start=1):
+            goal = by_id[key]
+            if goal.priority != priority:
+                goal.priority = priority
+                changed = True
+        # Moving a card is not progress on a goal: leave last_touched alone.
+        if changed:
+            self.save_goals(goals)
+        return [by_id[key] for key in order]
+
+
     def _unique_id(self, base_id: str, goals: List[Goal]) -> str:
         """Append -2, -3 ... until the id is not already used."""
         taken = {goal.id for goal in goals}

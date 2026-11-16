@@ -8,15 +8,15 @@ Three frosted-glass widgets bring your tasks, AI usage and computer stats to you
 
 ## Meet the widgets
 
-**To-Do Widget** keeps a plain-text task list close at hand. Tick tasks off, drag them to reorder, or use **Notepad** to edit the list directly. Press **Ctrl+F12** to snap the card to a screen corner. The **Goals** tab lets you add SMART goals and steps and track your progress.
+**To-Do Widget** keeps a plain-text task list close at hand. Tick tasks off, drag them to reorder, or use **Notepad** to edit the list directly. Press **Ctrl+F12** to snap the card to a screen corner. The **Goals** tab lets you add SMART goals and steps and track your progress. Drag a goal by its handle to change its priority. When all its steps are complete, **Remove finished goal** hides the card and preserves its history.
 
-**Usage Monitor** shows AI usage limits with progress bars and reset countdowns, as well as credits and budgets where available. Use the **ALL**, **FAVOURITES** and **CREDITS** tabs to switch views. It starts empty: add everything you want to track through its Settings window.
+**Usage Monitor** shows AI usage limits with progress bars and reset countdowns, as well as credits and budgets where available. Use the **ALL**, **FAVOURITES** and **CREDITS** tabs to switch views. Shared Claude and Codex windows appear once in each provider header. Independent Antigravity and AI Studio quotas remain on compact model rows. **NanoGPT Subscription** tracks weekly tokens and daily images separately from prepaid NanoGPT credits. It starts empty: add everything you want to track through its Settings window.
 
 **Desktop Monitor** displays live CPU, GPU, RAM and disk metrics, with **LIVE**, **LOG** and **PROCS** tabs. It supports NVIDIA, AMD, Intel and integrated graphics. An optional CPU temperature sensor helper adds temperature readings when supported. In Settings you can customize the status indicator, drive visibility and background image.
 
 ## Download and install
 
-1. Download **DesktopWidgets-Setup-1.0.0.exe** from the project's releases and run it.
+1. Download **DesktopWidgets-Setup-1.0.1.exe** from the project's releases and run it.
 2. If Windows SmartScreen shows **Windows protected your PC** and **Unknown publisher**, the installer is unsigned, so Windows cannot verify its publisher. If you trust the download, click **More info**, then **Run anyway**.
 3. Tick any combination of **To-Do Widget**, **Usage Monitor** and **Desktop Monitor**. Under Desktop Monitor, you can also choose **CPU temperature sensor**.
 4. Follow the remaining prompts and start your chosen widgets.
@@ -26,7 +26,7 @@ The normal installation does not need administrator rights. If you select **CPU 
 For an unattended installation, for example:
 
 ```text
-DesktopWidgets-Setup-1.0.0.exe /VERYSILENT /COMPONENTS="todo,usage,monitor"
+DesktopWidgets-Setup-1.0.1.exe /VERYSILENT /COMPONENTS="todo,usage,monitor"
 ```
 
 ## Linux

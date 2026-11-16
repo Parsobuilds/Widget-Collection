@@ -29,7 +29,7 @@ jobs:
           }
       - name: Build and verify installer
         env:
-          DESKTOP_WIDGETS_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0.0' }}
+          DESKTOP_WIDGETS_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0.1' }}
         run: python build.py
       - name: Upload unsigned installer
         id: upload-unsigned-installer

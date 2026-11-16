@@ -349,6 +349,110 @@ class StepRow(QtWidgets.QWidget):
 # ----------------------------------------------------------------------------------------
 # One goal card (compact when closed, steps + SMART view when open)
 # ----------------------------------------------------------------------------------------
+GOAL_MIME_TYPE = "application/x-desktop-widgets-goal"
+
+
+class GoalDragHandle(QtWidgets.QPushButton):
+    """Only the handle starts a drag, leaving steps and card clicks usable."""
+
+    drag_active = Signal(bool)
+
+    def __init__(self, goal_id: str, parent: QtWidgets.QWidget) -> None:
+        super().__init__("≡", parent)
+        self.goal_id = goal_id
+        self.start_position: QtCore.QPoint | None = None
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("Drag to change goal priority")
+        self.setAccessibleName("Drag goal to change priority")
+        self.setStyleSheet("QPushButton { color: #94a3b8; background: transparent; border: 0; }")
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.start_position = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self.start_position is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if (event.position().toPoint() - self.start_position).manhattanLength() < QtWidgets.QApplication.startDragDistance():
+            return
+        self.start_position = None
+        self.setDown(False)
+        mime = QtCore.QMimeData()
+        mime.setData(GOAL_MIME_TYPE, self.goal_id.encode("utf-8"))
+        drag = QtGui.QDrag(self)
+        drag.setMimeData(mime)
+        self.drag_active.emit(True)
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self.drag_active.emit(False)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        self.start_position = None
+        super().mouseReleaseEvent(event)
+
+
+class GoalDropArea(QtWidgets.QWidget):
+    """Receive drops over cards or gaps, with an insertion line and edge scroll."""
+
+    def __init__(self, panel: "GoalsPanel") -> None:
+        super().__init__()
+        self.panel = panel
+        self.line_y: int | None = None
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat(GOAL_MIME_TYPE):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:
+        if not event.mimeData().hasFormat(GOAL_MIME_TYPE):
+            return
+        y = event.position().y()
+        cards = self.panel.cards
+        self.line_y = next((card.y() for card in cards
+                            if y < card.y() + card.height() / 2),
+                           cards[-1].geometry().bottom() + 3 if cards else 2)
+        point = self.mapTo(self.panel.scroll.viewport(), event.position().toPoint())
+        bar = self.panel.scroll.verticalScrollBar()
+        if point.y() < 32:
+            bar.setValue(bar.value() - 18)
+        elif point.y() > self.panel.scroll.viewport().height() - 32:
+            bar.setValue(bar.value() + 18)
+        self.update()
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event: QtGui.QDragLeaveEvent) -> None:
+        self.line_y = None
+        self.update()
+        event.accept()
+
+    def dropEvent(self, event: QtGui.QDropEvent) -> None:
+        if not event.mimeData().hasFormat(GOAL_MIME_TYPE):
+            return
+        goal_id = bytes(event.mimeData().data(GOAL_MIME_TYPE)).decode("utf-8")
+        order = [card.goal.id for card in self.panel.cards if card.goal.id != goal_id]
+        before = next((card.goal.id for card in self.panel.cards
+                       if card.goal.id != goal_id and
+                       event.position().y() < card.y() + card.height() / 2), None)
+        index = order.index(before) if before else len(order)
+        order.insert(index, goal_id)
+        self.line_y = None
+        self.update()
+        # Rebuild after QDrag exits so its source widget is still alive.
+        QTimer.singleShot(0, lambda: self.panel.save_goal_order(order))
+        event.acceptProposedAction()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        if self.line_y is not None:
+            painter = QtGui.QPainter(self)
+            painter.setPen(QtGui.QPen(QtGui.QColor(glass_theme.ACCENT), 2))
+            painter.drawLine(0, max(0, self.line_y - 2), self.width(), max(0, self.line_y - 2))
+
+
 class GoalCard(QtWidgets.QWidget):
     """A rounded card for one goal. Click the card to open or close it."""
 
@@ -358,6 +462,8 @@ class GoalCard(QtWidgets.QWidget):
     step_stuck = Signal(str, int)       # goal id, step number
     step_opened = Signal(str, int)      # goal id, step number (opens the log dialog)
     smart_toggled = Signal(str)         # goal id
+    finish_clicked = Signal(str)
+    drag_active = Signal(bool)
 
     def __init__(
         self,
@@ -396,6 +502,9 @@ class GoalCard(QtWidgets.QWidget):
 
         top_row = QtWidgets.QHBoxLayout()
         top_row.setSpacing(6)
+        self.drag_handle = GoalDragHandle(self.goal.id, self)
+        self.drag_handle.drag_active.connect(self.drag_active.emit)
+        top_row.addWidget(self.drag_handle)
         top_row.addWidget(make_label(self.goal.title + paused, 10, glass_theme.C_VALUE, bold=True), stretch=1)
         count_color = glass_theme.EMERALD if total and done_count == total else glass_theme.C_LABEL
         top_row.addWidget(make_label(f"{done_count}/{total}", 9, count_color, bold=True, wrap=False),
@@ -410,6 +519,11 @@ class GoalCard(QtWidgets.QWidget):
         if upcoming is None:
             next_text = "All steps done - add the next one below" if total else "No steps yet - open this goal and add one below"
             next_row.addWidget(make_label(next_text, 8.5, glass_theme.C_FAINT), stretch=1)
+            if total and done_count == total:
+                self.finish_button = self._small_pill("Remove finished goal")
+                self.finish_button.setToolTip("Hide this finished goal; keep its history and backup")
+                self.finish_button.clicked.connect(lambda: self.finish_clicked.emit(self.goal.id))
+                next_row.addWidget(self.finish_button)
         else:
             number, step = upcoming
             next_row.addWidget(make_label(f"Next: {step.text}", 8.5, glass_theme.C_TEXT2), stretch=1)
@@ -643,6 +757,7 @@ class GoalsPanel(QtWidgets.QWidget):
         self.last_mtime = 0.0
         self.cards: list[GoalCard] = []
         self._focus_goal_id: str | None = None
+        self.drag_in_progress = False
         self._build_ui()
         self.refresh()
 
@@ -678,7 +793,7 @@ class GoalsPanel(QtWidgets.QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.scroll.setStyleSheet(SCROLL_AREA_STYLE)
-        self.card_container = QtWidgets.QWidget()
+        self.card_container = GoalDropArea(self)
         self.card_container.setStyleSheet("background: transparent;")
         self.card_layout = QtWidgets.QVBoxLayout(self.card_container)
         self.card_layout.setContentsMargins(0, 2, 6, 2)
@@ -728,7 +843,7 @@ class GoalsPanel(QtWidgets.QWidget):
         """Active goals first (by priority), then paused ones. Finished goals are hidden."""
         goals = self.goals_manager.load_goals()
         shown = [goal for goal in goals if goal.status != "done"]
-        return sorted(shown, key=lambda goal: (goal.status != "active", goal.priority, goal.created))
+        return sorted(shown, key=lambda goal: (goal.priority, goal.created, goal.id))
 
     def refresh(self) -> None:
         """Re-reads Goals.json and rebuilds the focus line and every card."""
@@ -749,6 +864,8 @@ class GoalsPanel(QtWidgets.QWidget):
 
     def poll_file_changes(self) -> None:
         """Called every 1.5 s: refresh only if the file's modified time moved on."""
+        if self.drag_in_progress:
+            return
         try:
             path = self.goals_manager.file_path
             if os.path.exists(path) and os.path.getmtime(path) > self.last_mtime:
@@ -789,9 +906,40 @@ class GoalsPanel(QtWidgets.QWidget):
             card.step_stuck.connect(self.toggle_stuck)
             card.step_opened.connect(self.open_step_log)
             card.smart_toggled.connect(self.toggle_smart)
+            card.finish_clicked.connect(self.finish_goal)
+            card.drag_active.connect(self._set_drag_active)
             self.cards.append(card)
             self.card_layout.addWidget(card)
         self.card_layout.addStretch()
+
+    def _set_drag_active(self, active: bool) -> None:
+        self.drag_in_progress = active
+
+
+    def finish_goal(self, goal_id: str) -> None:
+        try:
+            self.goals_manager.finish_goal(goal_id)
+        except (OSError, ValueError, KeyError) as error:
+            self._show_error(str(error))
+            return
+        if self.expanded_goal_id == goal_id:
+            self.expanded_goal_id = None
+        self.refresh()
+        self._set_footer("Finished goal removed. History kept in Goals Log.txt.", glass_theme.EMERALD)
+
+
+    def save_goal_order(self, goal_ids: list[str]) -> None:
+        if self.drag_in_progress:
+            QTimer.singleShot(50, lambda: self.save_goal_order(goal_ids))
+            return
+        try:
+            self.goals_manager.reorder_goals(goal_ids)
+        except (OSError, ValueError) as error:
+            self._show_error(str(error))
+            return
+        self.refresh()
+        self._set_footer("Goal priorities saved.", glass_theme.EMERALD)
+
 
     def _clear_cards(self) -> None:
         self.cards = []

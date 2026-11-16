@@ -28,6 +28,7 @@ from providers.deepseek import DeepSeekKind
 from providers.google_ai_studio_t3 import GoogleAIStudioT3Kind
 from providers.manual_budget import ManualBudgetKind, ModalBudgetKind
 from providers.nanogpt import NanoGPTKind
+from providers.nanogpt_sub import NanoGPTSubscriptionKind
 from providers.openrouter import OpenRouterKind
 
 if TYPE_CHECKING:
@@ -40,6 +41,7 @@ _KINDS: list[ProviderKind] = [
     CodexKind(),
     AntigravityKind(),
     NanoGPTKind(),
+    NanoGPTSubscriptionKind(),
     OpenRouterKind(),
     DeepSeekKind(),
     GoogleAIStudioT3Kind(),

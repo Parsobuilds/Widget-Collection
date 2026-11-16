@@ -42,6 +42,7 @@ you add is an *instance* with its own id, label and settings.
 | `claude_code` | Claude Code | unofficial | Claude Code sign-in file + `GET https://api.anthropic.com/api/oauth/usage` | 10 min |
 | `codex` | Codex | unofficial | Codex CLI `auth.json` + `GET https://chatgpt.com/backend-api/wham/usage` | 5 min |
 | `antigravity` | Antigravity | unofficial | T3 Code's Antigravity token file + Google Cloud Code `fetchAvailableModels` | 5 min |
+| `nanogpt_sub` | NanoGPT Subscription | official | `GET https://nano-gpt.com/api/subscription/v1/usage` | 5 min |
 | `nanogpt` | NanoGPT | official | `POST https://nano-gpt.com/api/check-balance` | 5 min |
 | `openrouter` | OpenRouter | official | `GET https://openrouter.ai/api/v1/key` | 5 min |
 | `deepseek` | DeepSeek | official | `GET https://api.deepseek.com/user/balance` | 5 min |
@@ -449,3 +450,11 @@ page. Same settings and rows as `manual_budget`.
 - **Docs:** https://modal.com/docs/guide/billing and
   https://modal.com/docs/reference/modal.billing
 - **Stability:** manual.
+
+## `nanogpt_sub`: NanoGPT subscription quotas
+
+Uses a subscription API key saved in the system key store and sent as `x-api-key`.
+Shows weekly input tokens and daily images. `percentUsed` is a fraction (multiply
+by 100); `resetAt` is epoch milliseconds (divide by 1000). These are quota rows,
+never credit cards. Labels are user selected; the installer contains no account
+credentials or personal usage data.

@@ -11,7 +11,7 @@ limits always come from the provider's own reply.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -252,3 +252,74 @@ def build_credit_rows(usage_rows: list[UsageRow]) -> list[CreditRow]:
         )
 
     return credits
+
+
+@dataclass
+class ProviderSummary:
+    """Header figures, shared by the desktop and JSON API clients."""
+
+    provider_id: str
+    provider_label: str
+    primary_percent: float | None = None
+    primary_label: str = ""
+    secondary_percent: float | None = None
+    secondary_label: str = ""
+    resets_at: str | None = None
+    reset_text: str = ""
+    status: str = "ok"
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the additive provider JSON contract."""
+        return asdict(self)
+
+
+
+def build_provider_summaries(rows: list[UsageRow]) -> list[ProviderSummary]:
+    """Summarise only known shared windows; never merge independent model limits."""
+    grouped: dict[str, list[UsageRow]] = {}
+    for row in rows:
+        grouped.setdefault(row.provider_id, []).append(row)
+    summaries = []
+    for provider_id, group in grouped.items():
+        first = group[0]
+        status = next((state for state in ("error", "stale", "no_data")
+                       if any(row.status == state for row in group)), "ok")
+        summary = ProviderSummary(provider_id, first.provider_label, status=status)
+        primary = secondary = None
+        if first.provider_kind == "claude_code":
+            primary = next((r for r in group if r.model_id in {"session", "five_hour"}), None)
+            secondary = next((r for r in group if r.model_id in {"weekly_all", "seven_day"}), None)
+        elif first.provider_kind == "codex":
+            primary = next((r for r in group if r.model_id == "primary"), None)
+            secondary = next((r for r in group if r.model_id == "secondary"), None)
+        if primary:
+            summary.primary_percent = primary.percent_used
+            summary.primary_label = f"5h {primary.percent_used:.0f}%" if primary.percent_used is not None else ""
+            summary.resets_at, summary.reset_text = primary.resets_at, primary.reset_text
+        if secondary:
+            summary.secondary_percent = secondary.percent_used
+            summary.secondary_label = f"7d {secondary.percent_used:.0f}%" if secondary.percent_used is not None else ""
+        if status != "ok":
+            summary.detail = " · ".join(dict.fromkeys(r.reason for r in group if r.reason and r.status != "ok"))
+        summaries.append(summary)
+    return summaries
+
+
+def model_display_row(row: UsageRow, summary: ProviderSummary) -> UsageRow:
+    """Keep scoped weekly/code-review limits; shared windows already have header bars."""
+    shared_ids = {"claude_code": {"session", "five_hour", "weekly_all", "seven_day"},
+                  "codex": {"primary", "secondary"}}
+    if row.model_id in shared_ids.get(row.provider_kind, set()) and row.status == "ok":
+        return replace(row, percent_used=None, secondary_percent=None, secondary_label="",
+                       resets_at=None, reset_text="", reason="")
+    return replace(row)
+
+
+def uses_inline_metrics(row: UsageRow) -> bool:
+    return row.provider_kind in {"antigravity", "google_ai_studio_t3"}
+
+
+def is_compact_row(row: UsageRow) -> bool:
+    return (row.percent_used is None and not row.secondary_label and
+            not row.reset_text and not row.reason)
