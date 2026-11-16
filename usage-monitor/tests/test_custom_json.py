@@ -57,6 +57,12 @@ class CustomJsonTests(KeyringMixin, unittest.TestCase):
         self.assertEqual(http.header(0, "Authorization"), f"Bearer {FAKE_KEY}")
         self.assertEqual(http.requests[0].get_method(), "GET")
 
+    def test_percent_left_path_draws_a_bar(self) -> None:
+        settings = {"url": "https://example.com/u", "percent_left_path": "a.0.left", "unit": "%"}
+        rows, _ = self._fetch(settings, {"a": [{"left": 84}]})
+        self.assertEqual(rows[0].percent_used, 16.0)
+        self.assertEqual(rows[0].secondary_label, "84% left")
+
     def test_balance_success_with_custom_header_and_post(self) -> None:
         settings = _settings(
             method="POST", key_header="x-api-key", key_prefix="", used_path="", limit_path="",

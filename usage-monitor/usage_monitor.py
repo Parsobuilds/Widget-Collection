@@ -82,6 +82,7 @@ from models import (
     UsageRow,
     build_credit_rows,
     ProviderSummary, build_provider_summaries, model_display_row, is_compact_row, uses_inline_metrics,
+    is_header_window_row,
     format_reset_countdown,
 )
 from providers import registry
@@ -1462,7 +1463,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 summary = build_provider_summaries(p_rows)[0]
                 total_h += self._provider_header_height(summary) + 4
                 total_h += sum(COMPACT_ROW_H if is_compact_row(model_display_row(row, summary))
-                               or uses_inline_metrics(row) else MODEL_ROW_H for row in p_rows)
+                               or uses_inline_metrics(row) else MODEL_ROW_H
+                               for row in p_rows if not is_header_window_row(row, summary))
         self._max_scroll_y = max(0, int(total_h - viewport_h + 8))
         self._scroll_y = max(0, min(self._scroll_y, self._max_scroll_y))
 
@@ -1538,11 +1540,11 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             btn_right = right - rw - 12
             dn_rect = QRectF(btn_right - 18, y + 1, 18, HEADER_H - 2)
             up_rect = QRectF(btn_right - 39, y + 1, 18, HEADER_H - 2)
-            self._pill(painter, up_rect, "â–²", self._scroll_y > 0, zone="scroll_up")
+            self._pill(painter, up_rect, "▲", self._scroll_y > 0, zone="scroll_up")
             self._pill(
                 painter,
                 dn_rect,
-                "â–¼",
+                "▼",
                 self._scroll_y < self._max_scroll_y,
                 zone="scroll_down",
             )
@@ -1710,7 +1712,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         shared_detail = summary.detail and (
             summary.status != "ok"
         )
-        return SECTION_H + (10 if has_bar else 0) + (12 if shared_detail else 0)
+        # +12 for the names printed under the bars (e.g. "Current session").
+        return SECTION_H + (22 if has_bar else 0) + (12 if shared_detail else 0)
 
     def _draw_provider_header(
         self, painter: QPainter, y: float, summary: ProviderSummary,
@@ -1734,12 +1737,18 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             C_AMBER if summary.status != "ok" else C_TEXT2,
             align_right=True, max_width=right - left - name_width - 6,
         )
-        values = [value for value in (summary.primary_percent, summary.secondary_percent)
-                  if value is not None]
-        if values:
-            width = (right - left - 6 * (len(values) - 1)) / len(values)
-            for index, value in enumerate(values):
-                self._draw_bar(painter, left + index * (width + 6), y + 15, width, value)
+        bars = [(value, name) for value, name in (
+            (summary.primary_percent, summary.primary_name),
+            (summary.secondary_percent, summary.secondary_name),
+        ) if value is not None]
+        if bars:
+            width = (right - left - 6 * (len(bars) - 1)) / len(bars)
+            for index, (value, name) in enumerate(bars):
+                bar_x = left + index * (width + 6)
+                self._draw_bar(painter, bar_x, y + 15, width, value)
+                # The window's name sits right under its own bar.
+                self._text(painter, bar_x, y + 28, name, qt_font(8, True), C_VALUE,
+                           max_width=width)
         if summary.detail and (
             summary.status != "ok"
         ):
@@ -1770,6 +1779,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 self._draw_provider_header(painter, cur_y, summary)
             cur_y += height
             for row in p_rows:
+                if is_header_window_row(row, summary):
+                    continue  # its bar and name are already in the header
                 display = model_display_row(row, summary)
                 compact = is_compact_row(display) or uses_inline_metrics(display)
                 row_height = COMPACT_ROW_H if compact else MODEL_ROW_H

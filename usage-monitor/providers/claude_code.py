@@ -89,6 +89,9 @@ def _row_from_window(
 # page shows). Unknown kinds get a label made from the kind itself.
 _KIND_LABELS = {"session": "Current session", "weekly_all": "All models"}
 
+# Per-model limits that are not shown (Fable is moving to API credits).
+_HIDDEN_TITLE_WORDS = ("fable",)
+
 
 def _scope_name(scope: Any) -> str:
     """'Opus' from ``{"model": {"display_name": "Opus"}}`` or a plain string."""
@@ -155,6 +158,8 @@ def parse_payload(
             percent = item.get("percent", item.get("utilization"))
             model_id, title = _limit_name(item)
             if percent is None or not title:
+                continue
+            if any(word in f"{title} {model_id}".lower() for word in _HIDDEN_TITLE_WORDS):
                 continue
             if model_id in used_ids:
                 continue

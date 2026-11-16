@@ -40,6 +40,17 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(rows[0].model_id, "example-flash-tiered")
         self.assertEqual(rows[0].reset_text, "resets in 1h 00m")
 
+    def test_models_setting_keeps_only_named_models_and_aliases(self) -> None:
+        payload = {"models": {
+            "gemini-3.8-flash-tiered": {"quotaInfo": {"remainingFraction": 0.9}},
+            "claude-opus-5-5-high": {"displayName": "Claude Opus", "quotaInfo": {"remainingFraction": 0.5}},
+        }}
+        inst = instance("antigravity", "Antigravity", settings={"models": "gemini-4-argon, gemini-4-hydrogen"})
+        rows = parse_payload(payload, inst, now=NOW)
+        self.assertEqual([r.model_label for r in rows], ["gemini-4-argon", "gemini-4-hydrogen"])
+        self.assertEqual([r.model_id for r in rows], ["gemini-4-argon", "gemini-4-hydrogen"])
+        self.assertEqual([round(r.percent_used, 1) for r in rows], [10.0, 10.0])
+
     def test_duplicate_labels_and_bad_fractions(self) -> None:
         payload = {
             "models": {

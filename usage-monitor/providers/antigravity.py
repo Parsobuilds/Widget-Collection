@@ -163,6 +163,21 @@ def fetch_models(access_token: str) -> Any:
     )
 
 
+# Names that Antigravity does not list itself: they share the quota of the first
+# of these models that the reply does list (Gemini models draw on one pool).
+MODEL_ALIASES: dict[str, list[str]] = {
+    "gemini-4-argon": ["gemini-3.8-flash-tiered", "gemini-2.5-pro", "gemini-3-flash"],
+    "gemini-4-hydrogen": ["gemini-3.8-flash-tiered", "gemini-2.5-pro", "gemini-3-flash"],
+}
+
+
+def _wanted_models(instance: "ProviderInstance") -> list[str]:
+    """The model names typed in the ``models`` setting (empty means show everything)."""
+    text = str(instance.settings.get("models") or "")
+    names = [part.strip() for part in text.replace(";", ",").split(",")]
+    return [name for name in names if name]
+
+
 def parse_payload(
     payload: Any,
     instance: "ProviderInstance",
@@ -178,13 +193,28 @@ def parse_payload(
     if not isinstance(models, dict):
         raise ProviderError(ProviderError.BAD_RESPONSE, "Antigravity's reply had no model list.")
 
+    wanted = _wanted_models(instance)
+    if wanted:
+        # Only the models the user named, in the order typed. A name that is not in
+        # the reply falls back to the shared pool listed in MODEL_ALIASES.
+        chosen: dict[str, tuple[str, Any]] = {}
+        for name in wanted:
+            for candidate in [name, *MODEL_ALIASES.get(name, [])]:
+                entry = models.get(candidate)
+                if isinstance(entry, dict) and isinstance(entry.get("quotaInfo"), dict):
+                    chosen[name] = (candidate, entry)
+                    break
+        items = [(name, entry, name) for name, (_, entry) in chosen.items()]
+    else:
+        items = [(key, entry, str(entry.get("displayName") or key) if isinstance(entry, dict) else key)
+                 for key, entry in models.items()]
+
     rows: list[UsageRow] = []
     seen_labels: set[str] = set()
-    for model_key, entry in models.items():
+    for model_key, entry, label in items:
         if not isinstance(entry, dict) or not isinstance(entry.get("quotaInfo"), dict):
             continue
         quota = entry["quotaInfo"]
-        label = str(entry.get("displayName") or model_key)
         if label in seen_labels:
             continue
         try:
@@ -228,7 +258,15 @@ class AntigravityKind(ProviderKind):
             default="",
             placeholder=profile_text(".t3", "userdata", "providers", "antigravity", "...", "acp_token.json"),
             help="Filled in by Detect. Leave empty to search the standard location.",
-        )
+        ),
+        FieldSpec(
+            key="models",
+            label="Models to show",
+            required=False,
+            default="",
+            placeholder="gemini-4-argon, gemini-4-hydrogen",
+            help="Comma-separated model names. Leave empty to show every model.",
+        ),
     ]
     supports_detect = True
     min_poll_seconds = 300

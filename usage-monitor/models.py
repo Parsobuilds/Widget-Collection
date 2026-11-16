@@ -262,8 +262,12 @@ class ProviderSummary:
     provider_label: str
     primary_percent: float | None = None
     primary_label: str = ""
+    primary_name: str = ""
     secondary_percent: float | None = None
     secondary_label: str = ""
+    secondary_name: str = ""
+    primary_id: str = ""
+    secondary_id: str = ""
     resets_at: str | None = None
     reset_text: str = ""
     status: str = "ok"
@@ -295,10 +299,12 @@ def build_provider_summaries(rows: list[UsageRow]) -> list[ProviderSummary]:
             secondary = next((r for r in group if r.model_id == "secondary"), None)
         if primary:
             summary.primary_percent = primary.percent_used
+            summary.primary_name, summary.primary_id = primary.model_label, primary.model_id
             summary.primary_label = f"5h {primary.percent_used:.0f}%" if primary.percent_used is not None else ""
             summary.resets_at, summary.reset_text = primary.resets_at, primary.reset_text
         if secondary:
             summary.secondary_percent = secondary.percent_used
+            summary.secondary_name, summary.secondary_id = secondary.model_label, secondary.model_id
             summary.secondary_label = f"7d {secondary.percent_used:.0f}%" if secondary.percent_used is not None else ""
         if status != "ok":
             summary.detail = " · ".join(dict.fromkeys(r.reason for r in group if r.reason and r.status != "ok"))
@@ -314,6 +320,15 @@ def model_display_row(row: UsageRow, summary: ProviderSummary) -> UsageRow:
         return replace(row, percent_used=None, secondary_percent=None, secondary_label="",
                        resets_at=None, reset_text="", reason="")
     return replace(row)
+
+
+def is_header_window_row(row: UsageRow, summary: ProviderSummary) -> bool:
+    """True when ``row`` is a shared window whose bar and name the provider header draws."""
+    if row.status != "ok":
+        return False
+    if summary.primary_percent is not None and row.model_id == summary.primary_id:
+        return True
+    return summary.secondary_percent is not None and row.model_id == summary.secondary_id
 
 
 def uses_inline_metrics(row: UsageRow) -> bool:

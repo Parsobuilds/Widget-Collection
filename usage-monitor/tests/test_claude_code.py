@@ -25,6 +25,13 @@ NOW = datetime(2030, 1, 1, 3, 0, tzinfo=timezone.utc)
 
 
 class ParseTests(unittest.TestCase):
+    def test_fable_limits_are_hidden(self) -> None:
+        payload = copy.deepcopy(samples.CLAUDE_CODE)
+        payload["limits"].append({"kind": "weekly_scoped", "scope": {"model": {"display_name": "Fable"}},
+                                  "percent": 17, "resets_at": "2030-01-03T05:00:00Z"})
+        rows = parse_payload(payload, instance("claude_code", "Claude"), now=NOW)
+        self.assertEqual([r.model_label for r in rows], ["Current session", "All models", "Opus only"])
+
     def test_limits_rows_from_sample(self) -> None:
         rows = parse_payload(samples.CLAUDE_CODE, instance("claude_code", "Claude"), now=NOW)
         self.assertEqual([r.model_label for r in rows], ["Current session", "All models", "Opus only"])
