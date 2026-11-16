@@ -1609,7 +1609,13 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             # Keep each quota independent while fitting it on one short line.
             countdown = format_reset_countdown(row.resets_at) or row.reset_text
             countdown = countdown.replace("resets in ", "").replace(" ", "")
-            percent = f"{row.percent_used:.0f}%" if row.percent_used is not None else "no data"
+            if row.percent_used is not None:
+                percent = f"{row.percent_used:.0f}%"
+            elif row.status == "ok" and row.reason:
+                # Count-only rows (no cap known), e.g. "3 requests today" -> "3 today".
+                percent = row.reason.replace(" requests today", " today").replace(" request today", " today")
+            else:
+                percent = "no data"
             note = f"{percent} {countdown}".strip()
             note_width = self._text(
                 painter, content_right, y + 11, note, qt_font(6.5),
