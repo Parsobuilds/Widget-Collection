@@ -33,13 +33,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Types]
 Name: "full"; Description: "All widgets"
-Name: "compact"; Description: "All widgets (standard)"
 Name: "custom"; Description: "Choose widgets"; Flags: iscustom
 
 [Components]
-Name: "todo"; Description: "To-Do Widget (tasks and SMART goals)"; Types: full compact custom
-Name: "usage"; Description: "Usage Monitor (AI plan limits and cloud budgets)"; Types: full compact custom
-Name: "monitor"; Description: "Desktop Monitor (CPU, GPU, RAM and disk card)"; Types: full compact custom
+Name: "todo"; Description: "To-Do Widget (tasks and SMART goals)"; Types: full custom
+Name: "usage"; Description: "Usage Monitor (AI plan limits and cloud budgets)"; Types: full custom
+Name: "monitor"; Description: "Desktop Monitor (CPU, GPU, RAM and disk card)"; Types: full custom
 Name: "monitor\cputemp"; Description: "CPU temperature sensor (installs elevated helper task and PawnIO driver; asks for administrator approval once)"; Flags: dontinheritcheck
 
 [Tasks]
