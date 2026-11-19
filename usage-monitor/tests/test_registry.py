@@ -124,7 +124,7 @@ class FetchInstanceTests(KeyringMixin, unittest.TestCase):
 class TestInstanceTests(KeyringMixin, unittest.TestCase):
     def test_secret_override_is_used_instead_of_stored(self) -> None:
         secrets_store.set_secret("abcd1234", "stored-fake-value")
-        with TempProfile(), FakeHttp(samples.NANOGPT) as http:
+        with TempProfile(), FakeHttp(samples.NANOGPT, {}) as http:
             result = registry.test_instance(instance("nanogpt"), secret_override=FAKE_KEY)
         self.assertTrue(result.ok, result.message)
         self.assertEqual(http.header(0, "x-api-key"), FAKE_KEY)

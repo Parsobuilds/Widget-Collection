@@ -20,6 +20,7 @@ from providers.base import (
     FieldSpec,
     ProviderError,
     ProviderKind,
+    clamp_percent,
     get_path,
     http_json,
     make_row,
@@ -31,16 +32,57 @@ if TYPE_CHECKING:
     from provider_config import ProviderInstance
 
 BALANCE_URL = "https://nano-gpt.com/api/check-balance"
+USAGE_URL = "https://nano-gpt.com/api/v1/usage"
 
 
-def parse_payload(payload: object, instance: "ProviderInstance", run_count: int | None = None) -> list[UsageRow]:
-    """Turn a ``check-balance`` reply into one balance row."""
+def _spent_usd(usage_payload: object) -> float | None:
+    """Total money spent so far from a ``/api/v1/usage`` reply, or None when unknown."""
+    totals = usage_payload.get("totals") if isinstance(usage_payload, dict) else None
+    if not isinstance(totals, dict):
+        return None
+    raw = totals.get("netCostUsd")
+    if raw is None:
+        raw = totals.get("costUsd")
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_payload(
+    payload: object,
+    instance: "ProviderInstance",
+    run_count: int | None = None,
+    usage_payload: object = None,
+) -> list[UsageRow]:
+    """Turn a ``check-balance`` reply (and optionally a usage reply) into one row.
+
+    With a usage reply the row gets a bar: the share of the money you have put in
+    (spent + balance) that is already spent. Without one it is a plain balance row.
+    """
     if not isinstance(payload, dict):
         raise ProviderError(ProviderError.BAD_RESPONSE, "NanoGPT's reply was not in the expected format.")
     balance = round(to_number(get_path(payload, "usd_balance"), "usd_balance"), 2)
     reason = f"{money_text(balance)} balance · pay-per-use"
     if run_count:
         reason += f" · {run_count} runs in T3 Code"
+    spent = _spent_usd(usage_payload)
+    pool = None if spent is None else balance + spent
+    if pool is not None and pool > 0:
+        return [
+            make_row(
+                instance,
+                model_id="balance",
+                model_label="Account balance",
+                percent_used=clamp_percent(spent / pool * 100),
+                status="ok",
+                secondary_label=f"{money_text(balance)} left · {money_text(round(spent, 2))} spent",
+                reason=reason,
+                credit_balance_usd=balance,
+                credit_spent_usd=round(spent, 2),
+                credit_cap_usd=round(pool, 2),
+            )
+        ]
     return [
         make_row(
             instance,
@@ -95,4 +137,8 @@ class NanoGPTKind(ProviderKind):
             body=b"{}",
         )
         runs = t3_run_count(str(instance.settings.get("t3_provider_instance") or "").strip())
-        return parse_payload(payload, instance, run_count=runs)
+        try:  # the bar is a bonus: a failed usage call must not hide the balance
+            usage = http_json(USAGE_URL, headers={"x-api-key": secret, "Accept": "application/json"})
+        except ProviderError:
+            usage = None
+        return parse_payload(payload, instance, run_count=runs, usage_payload=usage)

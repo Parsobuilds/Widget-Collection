@@ -24,6 +24,8 @@ from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from models import HIDDEN_ROWS_KEY, hidden_row_ids
+
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
@@ -211,6 +213,8 @@ class SettingsWindow(QtWidgets.QDialog):
     """List, add, edit, test, switch and remove usage providers."""
 
     providers_changed = QtCore.Signal()
+    # Emits the chosen image path, or "" to go back to the desktop wallpaper.
+    background_chosen = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None,
                  config_path: Path | None = None) -> None:
@@ -289,6 +293,17 @@ class SettingsWindow(QtWidgets.QDialog):
         scroll.setWidget(self._list_host)
         lay.addWidget(scroll, 1)
 
+        bg_row = QtWidgets.QHBoxLayout()
+        bg_row.addWidget(_label("Card background", "muted", wrap=False))
+        bg_row.addStretch(1)
+        self._bg_choose_btn = _button("Change background...")
+        self._bg_choose_btn.clicked.connect(self._choose_background)
+        self._bg_reset_btn = _button("Reset")
+        self._bg_reset_btn.clicked.connect(lambda: self.background_chosen.emit(""))
+        bg_row.addWidget(self._bg_choose_btn)
+        bg_row.addWidget(self._bg_reset_btn)
+        lay.addLayout(bg_row)
+
         foot = QtWidgets.QHBoxLayout()
         self._add_btn = _button("Add a provider", primary=True)
         self._add_btn.clicked.connect(self.start_add)
@@ -299,6 +314,16 @@ class SettingsWindow(QtWidgets.QDialog):
         foot.addWidget(close_btn)
         lay.addLayout(foot)
         return page
+
+    def _choose_background(self) -> None:
+        """Pick an image for the card background (shared with the other widgets)."""
+        pictures = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.PicturesLocation)
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Choose Widget Background Image", pictures,
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if path:
+            self.background_chosen.emit(path)
 
     def _kind_name(self, kind_id: str) -> str:
         kind = registry.get_kind(kind_id) if registry is not None else None
@@ -516,6 +541,7 @@ class SettingsWindow(QtWidgets.QDialog):
             if widget is not None:
                 widget.deleteLater()
         self._inputs = {}
+        self._row_checks = {}
         self._last_test = None
 
     def _build_form(self, kind: Any, inst: Any) -> None:
@@ -568,9 +594,70 @@ class SettingsWindow(QtWidgets.QDialog):
             lay.addWidget(self._make_input(spec, settings, editing=inst is not None))
             if spec.help:
                 lay.addWidget(_label(spec.help, "muted"))
+        self._build_row_picker(inst)
         lay.addStretch(1)
 
         self._detect_btn.setVisible(bool(kind.supports_detect))
+
+    # ------------------------------------------------------------ rows to show
+    def _build_row_picker(self, inst: Any) -> None:
+        """Add the "Rows to show" checklist: one tick box per row the provider reports.
+
+        It works the same for every provider. The rows come from the last
+        reading in the cache (or from the Test button for a new provider), and
+        unticked ones are saved as the ``hidden_rows`` setting.
+        """
+        lay = self._form_layout
+        lay.addSpacing(6)
+        lay.addWidget(_label("Rows to show on the card", "muted"))
+        box = QtWidgets.QWidget()
+        box.setObjectName("rowPicker")
+        self._row_layout = QtWidgets.QVBoxLayout(box)
+        self._row_layout.setContentsMargins(0, 0, 0, 0)
+        self._row_layout.setSpacing(2)
+        lay.addWidget(box)
+        rows: list[Any] = []
+        if inst is not None:
+            try:
+                from cache import UsageCache
+
+                snapshot = UsageCache().get(inst.instance_id)
+                rows = list(snapshot.rows) if snapshot else []
+            except Exception:  # noqa: BLE001 - an unreadable cache just means "press Test"
+                rows = []
+        hidden = hidden_row_ids(inst.settings if inst else {})
+        self._fill_row_picker(rows, hidden)
+
+    def _fill_row_picker(self, rows: list[Any], hidden: list[str]) -> None:
+        """(Re)draw the tick boxes. Hidden ids the provider no longer reports stay listed."""
+        while self._row_layout.count():
+            widget = self._row_layout.takeAt(0).widget()
+            if widget is not None:
+                widget.deleteLater()
+        options: dict[str, str] = {}
+        for row in rows:
+            row_id = str(getattr(row, "model_id", "") or "")
+            if row_id and getattr(row, "status", "") != "error" and row_id not in options:
+                options[row_id] = getattr(row, "model_label", "") or row_id
+        for row_id in hidden:
+            options.setdefault(row_id, row_id)
+        self._row_checks: dict[str, QtWidgets.QCheckBox] = {}
+        if not options:
+            self._row_layout.addWidget(_label("Press Test to list what this provider reports.", "muted"))
+            return
+        for row_id, label in options.items():
+            check = QtWidgets.QCheckBox(label)
+            check.setObjectName(f"row_{row_id}")
+            check.setChecked(row_id not in hidden)
+            if label != row_id:
+                check.setToolTip(row_id)
+            self._row_layout.addWidget(check)
+            self._row_checks[row_id] = check
+
+    def _hidden_from_picker(self) -> list[str]:
+        """Row ids whose tick box is cleared."""
+        return [row_id for row_id, check in getattr(self, "_row_checks", {}).items()
+                if not check.isChecked()]
 
     def _make_input(self, spec: Any, settings: dict[str, Any], editing: bool) -> QtWidgets.QWidget:
         """Create the input widget for one FieldSpec and remember it in ``self._inputs``."""
@@ -646,6 +733,9 @@ class SettingsWindow(QtWidgets.QDialog):
                 settings[spec.key] = raw.lstrip()
             else:
                 settings[spec.key] = raw.strip()
+        hidden = self._hidden_from_picker()
+        if hidden:
+            settings[HIDDEN_ROWS_KEY] = ", ".join(hidden)
         return label, settings, secrets
 
     def _has_saved_secret(self) -> bool:
@@ -734,6 +824,8 @@ class SettingsWindow(QtWidgets.QDialog):
             getattr(result, "message", "") or "The test did not work.")
         self._last_test = (ok, text)
         self._say(text, "ok" if ok else "bad")
+        if ok and getattr(result, "rows", None) and self._kind is not None:
+            self._fill_row_picker(list(result.rows), self._hidden_from_picker())
         if self._editing_id:
             self._status[self._editing_id] = text.splitlines()[0] if text else ""
             self._status_ok[self._editing_id] = ok

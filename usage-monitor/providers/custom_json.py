@@ -58,6 +58,7 @@ def build_rows(payload: Any, instance: "ProviderInstance") -> list[UsageRow]:
     used_path = _text(settings, "used_path").strip()
     limit_path = _text(settings, "limit_path").strip()
     balance_path = _text(settings, "balance_path").strip()
+    left_percent_path = _text(settings, "percent_left_path").strip()
     unit = _text(settings, "unit", "USD").strip() or "USD"
     is_money = unit.upper() == "USD"
 
@@ -76,6 +77,11 @@ def build_rows(payload: Any, instance: "ProviderInstance") -> list[UsageRow]:
         if is_money:
             values["credit_spent_usd"] = round(used, 2)
             values["credit_cap_usd"] = round(limit, 2)
+
+    if left_percent_path and percent is None:
+        left = to_number(get_path(payload, left_percent_path), left_percent_path)
+        percent = clamp_percent(100 - left)
+        secondary = f"{left:,.6g}% left"
 
     if balance_path:
         balance = to_number(get_path(payload, balance_path), balance_path)
@@ -111,10 +117,11 @@ def validate_settings(settings: dict[str, Any], secret: str | None) -> None:
     used = _text(settings, "used_path").strip()
     limit = _text(settings, "limit_path").strip()
     balance = _text(settings, "balance_path").strip()
+    left_percent = _text(settings, "percent_left_path").strip()
     if bool(used) != bool(limit):
         raise ProviderError(ProviderError.CONFIG, "Set both the used path and the limit path, or neither.")
-    if not (used or balance):
-        raise ProviderError(ProviderError.CONFIG, "Set a used path and a limit path, or a balance path.")
+    if not (used or balance or left_percent):
+        raise ProviderError(ProviderError.CONFIG, "Set a used path and a limit path, a balance path, or a percent-left path.")
     if secret:
         header = _text(settings, "key_header", "Authorization").strip() or "Authorization"
         if not _HEADER_NAME.match(header):
@@ -149,6 +156,8 @@ class CustomJsonKind(ProviderKind):
         FieldSpec(key="limit_path", label="Limit path", required=False, placeholder="data.limit"),
         FieldSpec(key="balance_path", label="Balance path", required=False, placeholder="data.balance",
                   help="Dot path to the remaining balance."),
+        FieldSpec(key="percent_left_path", label="Percent left path", required=False, placeholder="data.remaining_percent",
+                  help="Dot path to a number from 0 to 100 that is the share still left. Draws the bar."),
         FieldSpec(key="unit", label="Unit", required=False, default="USD",
                   help="USD for money, or any word such as credits or tokens."),
     ]

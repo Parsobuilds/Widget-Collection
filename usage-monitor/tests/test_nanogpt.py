@@ -76,7 +76,7 @@ class ParseTests(unittest.TestCase):
 class FetchTests(KeyringMixin, unittest.TestCase):
     def test_posts_with_api_key_header(self) -> None:
         secrets_store.set_secret("abcd1234", FAKE_KEY)
-        with TempProfile(), FakeHttp(samples.NANOGPT) as http:
+        with TempProfile(), FakeHttp(samples.NANOGPT, {"totals": {"netCostUsd": 5.0}}) as http:
             rows = registry.fetch_instance(instance("nanogpt"))
         request = http.requests[0]
         self.assertEqual(request.full_url, "https://nano-gpt.com/api/check-balance")
@@ -84,6 +84,15 @@ class FetchTests(KeyringMixin, unittest.TestCase):
         self.assertEqual(http.header(0, "x-api-key"), FAKE_KEY)
         self.assertIsNone(http.header(0, "Authorization"))
         self.assertEqual(rows[0].credit_balance_usd, 12.35)
+        self.assertEqual(http.requests[1].full_url, "https://nano-gpt.com/api/v1/usage")
+        self.assertEqual(rows[0].percent_used, 28.8)  # 5.00 spent of 5.00 + 12.35
+
+    def test_usage_failure_keeps_the_balance_row(self) -> None:
+        secrets_store.set_secret("abcd1234", FAKE_KEY)
+        with TempProfile(), FakeHttp(samples.NANOGPT, urllib.error.URLError("offline")):
+            rows = registry.fetch_instance(instance("nanogpt"))
+        self.assertEqual(rows[0].credit_balance_usd, 12.35)
+        self.assertIsNone(rows[0].percent_used)
 
     def test_no_key_is_config_error(self) -> None:
         with self.assertRaises(ProviderError) as ctx:
@@ -105,7 +114,7 @@ class FetchTests(KeyringMixin, unittest.TestCase):
                 ("nanogpt_t3", "model-b", "2030-01-01T02:00:00Z"),
                 ("other", "model-a", "2030-01-01T02:00:00Z"),
             ])
-            with FakeHttp(samples.NANOGPT):
+            with FakeHttp(samples.NANOGPT, {}):
                 result = registry.test_instance(
                     instance("nanogpt", settings={"t3_provider_instance": "nanogpt_t3"}), secret_override=FAKE_KEY
                 )
@@ -113,7 +122,7 @@ class FetchTests(KeyringMixin, unittest.TestCase):
         self.assertIn("2 runs in T3 Code", result.rows[0].reason)
 
     def test_missing_database_is_ignored(self) -> None:
-        with TempProfile(), FakeHttp(samples.NANOGPT):
+        with TempProfile(), FakeHttp(samples.NANOGPT, {}):
             result = registry.test_instance(
                 instance("nanogpt", settings={"t3_provider_instance": "nanogpt_t3"}), secret_override=FAKE_KEY
             )

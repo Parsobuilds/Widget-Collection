@@ -77,11 +77,13 @@ if str(HERE) not in sys.path:
 import provider_config
 import secrets_store
 from cache import UsageCache
+from providers._t3models import models_for as t3_models_for
 from models import (
     CreditRow,
     UsageRow,
     build_credit_rows,
     ProviderSummary, build_provider_summaries, model_display_row, is_compact_row, uses_inline_metrics,
+    is_header_window_row,
     format_reset_countdown,
 )
 from providers import registry
@@ -646,6 +648,22 @@ def custom_bg_settings():
         return None
 
 
+def save_background_config(updates: dict) -> None:
+    """Merge ``updates`` into the shared widget_background.json (read by all three widgets)."""
+    source = background_config_path()
+    data: dict = {}
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8-sig"))
+        if isinstance(raw, dict):
+            data = raw
+    except (OSError, ValueError):
+        pass
+    data.update(updates)
+    target = BG_CONFIG_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def build_blur_rect(monitor_rect, card_rect, settings, dpr: float, custom_bg=None):
     """Build frosted-glass background QPixmap matching Desktop Monitor."""
     path, style, tile, _mtime = settings
@@ -886,6 +904,32 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         self.config["favourites"] = favs
         save_config(self.config)
         self.update()
+
+    def show_models_menu(self, instance_id: str) -> None:
+        """Drop down the models this provider offers, as T3 Code's picker lists them.
+
+        Clicking a model copies its id (handy when setting up other tools).
+        Showing or hiding the card's rows stays in Settings.
+        """
+        inst = next((i for i in provider_config.list_instances(provider_config.load_config())
+                     if i.instance_id == instance_id), None)
+        if inst is None:
+            return
+        models = t3_models_for(inst)
+        menu = QtWidgets.QMenu(self)
+        title = menu.addAction(f"{inst.label}: models available")
+        title.setEnabled(False)
+        menu.addSeparator()
+        for slug, name in models:
+            action = menu.addAction(name)
+            action.setToolTip(f"{slug} (click to copy)")
+            action.triggered.connect(
+                lambda _checked=False, text=slug: QtWidgets.QApplication.clipboard().setText(text))
+        if not models:
+            menu.addAction("No model list for this provider").setEnabled(False)
+        menu.setToolTipsVisible(True)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+        menu.popup(QtGui.QCursor.pos())
 
     def move_favourite(self, star_key: str, delta: int) -> None:
         """Move a starred row up (-1) or down (+1) in the user's own order."""
@@ -1193,8 +1237,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 save_config(self.config)
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
-        """Right-click on the card shows the same menu as the tray icon (Linux only)."""
-        if not IS_WINDOWS and self.context_menu is not None:
+        """Right-click on the card shows the same menu as the tray icon."""
+        if self.context_menu is not None:
             self.context_menu.popup(event.globalPos())
             event.accept()
 
@@ -1213,6 +1257,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             self.update()
         elif name.startswith("star:"):
             self.toggle_star(name[5:])
+        elif name.startswith("models:"):
+            self.show_models_menu(name[7:])
         elif name.startswith("up:"):
             self.move_favourite(name[3:], -1)
         elif name.startswith("down:"):
@@ -1462,7 +1508,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 summary = build_provider_summaries(p_rows)[0]
                 total_h += self._provider_header_height(summary) + 4
                 total_h += sum(COMPACT_ROW_H if is_compact_row(model_display_row(row, summary))
-                               or uses_inline_metrics(row) else MODEL_ROW_H for row in p_rows)
+                               or uses_inline_metrics(row) else MODEL_ROW_H
+                               for row in p_rows if not is_header_window_row(row, summary))
         self._max_scroll_y = max(0, int(total_h - viewport_h + 8))
         self._scroll_y = max(0, min(self._scroll_y, self._max_scroll_y))
 
@@ -1538,11 +1585,11 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             btn_right = right - rw - 12
             dn_rect = QRectF(btn_right - 18, y + 1, 18, HEADER_H - 2)
             up_rect = QRectF(btn_right - 39, y + 1, 18, HEADER_H - 2)
-            self._pill(painter, up_rect, "â–²", self._scroll_y > 0, zone="scroll_up")
+            self._pill(painter, up_rect, "▲", self._scroll_y > 0, zone="scroll_up")
             self._pill(
                 painter,
                 dn_rect,
-                "â–¼",
+                "▼",
                 self._scroll_y < self._max_scroll_y,
                 zone="scroll_down",
             )
@@ -1591,7 +1638,13 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             # Keep each quota independent while fitting it on one short line.
             countdown = format_reset_countdown(row.resets_at) or row.reset_text
             countdown = countdown.replace("resets in ", "").replace(" ", "")
-            percent = f"{row.percent_used:.0f}%" if row.percent_used is not None else "no data"
+            if row.percent_used is not None:
+                percent = f"{row.percent_used:.0f}%"
+            elif row.status == "ok" and row.reason:
+                # Count-only rows (no cap known), e.g. "3 requests today" -> "3 today".
+                percent = row.reason.replace(" requests today", " today").replace(" request today", " today")
+            else:
+                percent = "no data"
             note = f"{percent} {countdown}".strip()
             note_width = self._text(
                 painter, content_right, y + 11, note, qt_font(6.5),
@@ -1710,36 +1763,69 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         shared_detail = summary.detail and (
             summary.status != "ok"
         )
-        return SECTION_H + (10 if has_bar else 0) + (12 if shared_detail else 0)
+        # +12 for the names printed under the bars (e.g. "Current session").
+        return SECTION_H + (22 if has_bar else 0) + (12 if shared_detail else 0)
 
     def _draw_provider_header(
         self, painter: QPainter, y: float, summary: ProviderSummary,
     ) -> None:
         """Draw shared provider windows once."""
         left, right = float(self._left()), float(self._right())
-        labels = [summary.primary_label, summary.secondary_label]
-        countdown = format_reset_countdown(summary.resets_at) or summary.reset_text
-        if countdown:
-            labels.append(countdown.replace("resets in ", "↻ "))
-        reading = " · ".join(label for label in labels if label)
-        if not reading and summary.status != "ok":
-            reading = summary.status.replace("_", " ")
-        name_width = self._text(
-            painter, left, y + 11, summary.provider_label,
-            qt_font(8, True), C_LABEL,
-            max_width=(right - left) * (0.42 if reading else 1),
-        )
-        self._text(
-            painter, right, y + 11, reading, qt_font(7),
-            C_AMBER if summary.status != "ok" else C_TEXT2,
-            align_right=True, max_width=right - left - name_width - 6,
-        )
-        values = [value for value in (summary.primary_percent, summary.secondary_percent)
-                  if value is not None]
-        if values:
-            width = (right - left - 6 * (len(values) - 1)) / len(values)
-            for index, value in enumerate(values):
-                self._draw_bar(painter, left + index * (width + 6), y + 15, width, value)
+
+        def countdown(resets_at: str | None, text: str) -> str:
+            """Short "↻ 3h 44m" form of a window's reset time."""
+            return (format_reset_countdown(resets_at) or text).replace("resets in ", "↻ ")
+
+        bars = [(value, name, window_id, countdown(resets_at, text))
+                for value, name, window_id, resets_at, text in (
+            (summary.primary_percent, summary.primary_name, summary.primary_id,
+             summary.resets_at, summary.reset_text),
+            (summary.secondary_percent, summary.secondary_name, summary.secondary_id,
+             summary.secondary_resets_at, summary.secondary_reset_text),
+        ) if value is not None]
+        width = (right - left - 6 * (len(bars) - 1)) / len(bars) if bars else right - left
+        reading_color = C_AMBER if summary.status != "ok" else C_TEXT2
+        if bars:
+            # Each bar's own reading ("4% ↻ 3h 44m") sits just above its right end.
+            readings = [" ".join(part for part in (f"{value:.0f}%", reset) if part)
+                        for value, _name, _id, reset in bars]
+            first_w = QtGui.QFontMetrics(qt_font(7)).horizontalAdvance(readings[0])
+            name_width = self._text(painter, left, y + 11, summary.provider_label, qt_font(8, True),
+                                    C_LABEL, max_width=max(20.0, width - first_w - 12))
+            for index, reading in enumerate(readings):
+                bar_x = left + index * (width + 6)
+                self._text(painter, bar_x + width, y + 11, reading, qt_font(7), reading_color,
+                           align_right=True, max_width=width if index else width * 0.6)
+        else:
+            reading = summary.status.replace("_", " ") if summary.status != "ok" else ""
+            name_width = self._text(
+                painter, left, y + 11, summary.provider_label, qt_font(8, True), C_LABEL,
+                max_width=(right - left) * (0.42 if reading else 1),
+            )
+            self._text(painter, right, y + 11, reading, qt_font(7), reading_color,
+                       align_right=True, max_width=right - left - name_width - 6)
+        # Clicking the provider's name lists the models it offers.
+        self._text(painter, left + name_width + 3, y + 11, "▾", qt_font(7, True), C_TEXT2)
+        self._zones.append((QRectF(left, y, name_width + 14, 14), f"models:{summary.provider_id}"))
+        if bars:
+            for index, (value, name, window_id, _reset) in enumerate(bars):
+                bar_x = left + index * (width + 6)
+                self._draw_bar(painter, bar_x, y + 15, width, value)
+                # Each shared window (e.g. Claude's 5-hour limit) can be starred,
+                # using the same "provider:model" key as an ordinary row.
+                star_w = 0.0
+                if window_id:
+                    star_key = f"{summary.provider_id}:{window_id}"
+                    starred = star_key in (self.config.get("favourites") or [])
+                    self._text(painter, bar_x + width, y + 28, "★" if starred else "☆",
+                               qt_font(9, True), C_AMBER if starred else C_LABEL,
+                               align_right=True)
+                    star_w = 14.0
+                    self._zones.append((QRectF(bar_x + width - 15, y + 17, 17, 15),
+                                        f"star:{star_key}"))
+                # The window's name sits right under its own bar.
+                self._text(painter, bar_x, y + 28, name, qt_font(8, True), C_VALUE,
+                           max_width=width - star_w)
         if summary.detail and (
             summary.status != "ok"
         ):
@@ -1770,6 +1856,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
                 self._draw_provider_header(painter, cur_y, summary)
             cur_y += height
             for row in p_rows:
+                if is_header_window_row(row, summary):
+                    continue  # its bar and name are already in the header
                 display = model_display_row(row, summary)
                 compact = is_compact_row(display) or uses_inline_metrics(display)
                 row_height = COMPACT_ROW_H if compact else MODEL_ROW_H
@@ -2294,7 +2382,15 @@ def show_settings(widget: "UsageMonitorWidget", worker: "CollectorWorker"):
             widget.update()
             QtCore.QMetaObject.invokeMethod(worker, "force_poll", Qt.QueuedConnection)
 
+        def _background(path: str) -> None:
+            if path and not os.path.isfile(path):
+                return
+            save_background_config({"image_path": path})
+            widget.refresh_blur(force=True)
+            widget.update()
+
         window.providers_changed.connect(_changed)
+        window.background_chosen.connect(_background)
         window._usage_monitor_wired = True
     return window
 
@@ -2307,7 +2403,7 @@ def build_menu(
     worker: CollectorWorker,
     stop_callback: Callable[[], None],
 ) -> QtWidgets.QMenu:
-    """Build the menu: Settings / Move / Lock / Refresh / Opacity / autostart / Quit.
+    """Build the menu: Settings / Move / Lock / Refresh / Opacity / Background / autostart / Quit.
 
     The tray icon shows it, and on Linux a right-click on the card shows it too
     (some desktops have no tray).
@@ -2367,6 +2463,33 @@ def build_menu(
 
         act.triggered.connect(_set_op)
         opacity_group.addAction(act)
+
+    background_menu = menu.addMenu("Background")
+    choose_bg_action = background_menu.addAction("Change background image...")
+    reset_bg_action = background_menu.addAction("Reset to desktop wallpaper")
+
+    def _choose_background(_checked: bool = False) -> None:
+        pictures = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.PicturesLocation
+        )
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            None,
+            "Choose Widget Background Image",
+            pictures,
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)",
+        )
+        if path and os.path.isfile(path):
+            save_background_config({"image_path": path})
+            widget.refresh_blur(force=True)
+            widget.update()
+
+    def _reset_background(_checked: bool = False) -> None:
+        save_background_config({"image_path": ""})
+        widget.refresh_blur(force=True)
+        widget.update()
+
+    choose_bg_action.triggered.connect(_choose_background)
+    reset_bg_action.triggered.connect(_reset_background)
 
     menu.addSeparator()
     autostart_action = menu.addAction(AUTOSTART_LABEL)

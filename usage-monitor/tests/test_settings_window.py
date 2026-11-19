@@ -238,6 +238,19 @@ class SettingsWindowTests(unittest.TestCase):
     def _bump(self) -> None:
         self.changed += 1
 
+    def test_background_buttons_emit_path_or_reset(self) -> None:
+        win = self.make()
+        got: list[str] = []
+        win.background_chosen.connect(got.append)
+        with mock.patch.object(QtWidgets.QFileDialog, "getOpenFileName",
+                               return_value=("C:/pics/a.png", "")):
+            win._bg_choose_btn.click()
+        win._bg_reset_btn.click()
+        with mock.patch.object(QtWidgets.QFileDialog, "getOpenFileName",
+                               return_value=("", "")):
+            win._bg_choose_btn.click()
+        self.assertEqual(got, ["C:/pics/a.png", ""])
+
     def seed_two(self) -> None:
         self.config.disk["providers"] = [
             {"instance_id": "aaaa1111", "kind": "signin_a", "label": "Work account",
@@ -426,6 +439,29 @@ class SettingsWindowTests(unittest.TestCase):
         win._save_btn.click()
         self.assertEqual(self.secrets.store["bbbb2222"], "sk-fake-new")
         self.assertNotIn("sk-fake-new", repr(self.config.disk))
+
+    def test_row_checklist_saves_unticked_rows(self) -> None:
+        from types import SimpleNamespace
+
+        self.seed_two()
+        win = self.make()
+        win.start_edit("bbbb2222")
+        rows = [SimpleNamespace(model_id=row_id, model_label=label, status="ok")
+                for row_id, label in (("five_hour", "5-hour limit"), ("model-x", "Model X"))]
+        win._fill_row_picker(rows, [])
+        self.assertEqual(list(win._row_checks), ["five_hour", "model-x"])
+        self.assertTrue(all(check.isChecked() for check in win._row_checks.values()))
+        win._row_checks["model-x"].setChecked(False)
+        win._save_btn.click()
+        self.assertEqual(self.config.disk["providers"][1]["settings"]["hidden_rows"], "model-x")
+        # Reopening keeps the hidden row listed (unticked) even before a new reading.
+        win.start_edit("bbbb2222")
+        self.assertIn("model-x", win._row_checks)
+        self.assertFalse(win._row_checks["model-x"].isChecked())
+        # Ticking it again clears the setting.
+        win._row_checks["model-x"].setChecked(True)
+        win._save_btn.click()
+        self.assertNotIn("hidden_rows", self.config.disk["providers"][1]["settings"])
 
     def test_enter_does_not_save(self) -> None:
         win = self.make()

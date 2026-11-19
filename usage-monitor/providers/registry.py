@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import secrets_store
-from models import UsageRow
+from models import UsageRow, hidden_row_ids
 from providers.antigravity import AntigravityKind
 from providers.base import ProviderError, ProviderKind, TestResult, error_row
 from providers.claude_code import ClaudeCodeKind
@@ -120,6 +120,14 @@ def _fetch(instance: "ProviderInstance", secret: str | None, use_stored: bool) -
     return _restamp(list(rows), instance)
 
 
+def visible_rows(instance: "ProviderInstance", rows: list[UsageRow]) -> list[UsageRow]:
+    """Drop the rows the user hid. Error rows always stay so problems show."""
+    hidden = set(hidden_row_ids(instance.settings))
+    if not hidden:
+        return rows
+    return [row for row in rows if row.status == "error" or row.model_id not in hidden]
+
+
 def fetch_instance(instance: "ProviderInstance") -> list[UsageRow]:
     """One live reading for ``instance``, using its stored secret. Never raises."""
     return _fetch(instance, None, use_stored=True)
@@ -184,7 +192,9 @@ def collect_enabled(
         rows = _restamp(list(snapshot.rows), instance)  # label may have changed since caching
         if not rows:
             rows = [error_row(instance, snapshot.error or "No data available.")]
-        return rows, snapshot.is_stale and any(r.status != "error" for r in rows)
+        stale = snapshot.is_stale and any(r.status != "error" for r in rows)
+        # The cache keeps every row, so Settings can still list the hidden ones.
+        return visible_rows(instance, rows), stale
 
     with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_FETCHES, len(jobs))) as pool:
         results = list(pool.map(_one, jobs))  # map keeps the config order

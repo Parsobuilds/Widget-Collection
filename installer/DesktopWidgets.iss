@@ -92,7 +92,8 @@ function TargetUserName(): String;
 var
   Domain: String;
 begin
-  Domain := ExpandConstant('{userdomain}');
+  // Inno Setup has no userdomain constant; read the environment variable instead.
+  Domain := GetEnv('USERDOMAIN');
   Result := ExpandConstant('{username}');
   if Domain <> '' then
     Result := Domain + '\' + Result;
