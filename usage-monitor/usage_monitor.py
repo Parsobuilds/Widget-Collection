@@ -1763,8 +1763,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         shared_detail = summary.detail and (
             summary.status != "ok"
         )
-        # +12 for the names printed under the bars (e.g. "Current session").
-        return SECTION_H + (25 if has_bar else 0) + (12 if shared_detail else 0)
+        # Bar plus a clear gap above and below it, then the names printed under the bars (e.g. "Current session").
+        return SECTION_H + (30 if has_bar else 0) + (12 if shared_detail else 0)
 
     def _draw_provider_header(
         self, painter: QPainter, y: float, summary: ProviderSummary,
@@ -1810,21 +1810,21 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         if bars:
             for index, (value, name, window_id, _reset) in enumerate(bars):
                 bar_x = left + index * (width + 6)
-                self._draw_bar(painter, bar_x, y + 18, width, value)
+                self._draw_bar(painter, bar_x, y + 17, width, value)
                 # Each shared window (e.g. Claude's 5-hour limit) can be starred,
                 # using the same "provider:model" key as an ordinary row.
                 star_w = 0.0
                 if window_id:
                     star_key = f"{summary.provider_id}:{window_id}"
                     starred = star_key in (self.config.get("favourites") or [])
-                    self._text(painter, bar_x + width, y + 31, "★" if starred else "☆",
+                    self._text(painter, bar_x + width, y + 36, "★" if starred else "☆",
                                qt_font(9, True), C_AMBER if starred else C_LABEL,
                                align_right=True)
                     star_w = 14.0
-                    self._zones.append((QRectF(bar_x + width - 15, y + 20, 17, 15),
+                    self._zones.append((QRectF(bar_x + width - 15, y + 24, 17, 15),
                                         f"star:{star_key}"))
                 # The window's name sits right under its own bar.
-                self._text(painter, bar_x, y + 31, name, qt_font(8, True), C_VALUE,
+                self._text(painter, bar_x, y + 36, name, qt_font(8, True), C_VALUE,
                            max_width=width - star_w)
         if summary.detail and (
             summary.status != "ok"
