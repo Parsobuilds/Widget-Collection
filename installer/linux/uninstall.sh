@@ -38,7 +38,7 @@ BIN_DIR=$HOME/.local/bin
 CONFIG_DIR=$CONFIG_HOME/DesktopWidgets
 SHARED_SETTINGS=$CONFIG_DIR/widget_background.json
 
-# Names are fixed: key -> binary / data folder (see docs/LINUX_PORT.md).
+# Names are fixed: key -> binary / data folder.
 name_of() { case $1 in todo) echo TodoWidget;; usage) echo UsageMonitor;; desktop) echo DesktopMonitor;; esac; }
 
 # ---- small helpers --------------------------------------------------------

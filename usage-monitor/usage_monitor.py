@@ -124,7 +124,7 @@ GAP = 8
 
 SINGLE_INSTANCE_KEY = "DesktopWidgets.UsageMonitor"
 RUN_VALUE_NAME = "DesktopWidgets.UsageMonitor"
-# Linux names (see docs/LINUX_PORT.md): autostart entry and single-instance lock.
+# Linux names: autostart entry and single-instance lock.
 AUTOSTART_FILE_NAME = "desktopwidgets-usage.desktop"
 LOCK_FILE_NAME = "desktopwidgets-usage.lock"
 LAUNCHER_NAME = "desktopwidgets-usage"

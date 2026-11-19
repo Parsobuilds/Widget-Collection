@@ -2,8 +2,7 @@
 
 A PySide6 desktop card that shows usage limits and credit balances for the AI services and
 budgets the user adds in its Settings window. End-user documentation is in the top-level
-`README.md`; endpoint details are in [`SOURCES.md`](SOURCES.md) and the module interface in
-[`INTERFACE.md`](INTERFACE.md).
+`README.md`; endpoint details are in [`SOURCES.md`](SOURCES.md).
 
 ## Layout
 
