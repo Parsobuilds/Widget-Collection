@@ -30,11 +30,11 @@ class ParseTests(unittest.TestCase):
         payload["limits"].append({"kind": "weekly_scoped", "scope": {"model": {"display_name": "Fable"}},
                                   "percent": 17, "resets_at": "2030-01-03T05:00:00Z"})
         rows = parse_payload(payload, instance("claude_code", "Claude"), now=NOW)
-        self.assertEqual([r.model_label for r in rows], ["Current session", "All models", "Opus only"])
+        self.assertEqual([r.model_label for r in rows], ["5-hour limit", "7-day limit", "Opus only"])
 
     def test_limits_rows_from_sample(self) -> None:
         rows = parse_payload(samples.CLAUDE_CODE, instance("claude_code", "Claude"), now=NOW)
-        self.assertEqual([r.model_label for r in rows], ["Current session", "All models", "Opus only"])
+        self.assertEqual([r.model_label for r in rows], ["5-hour limit", "7-day limit", "Opus only"])
         self.assertEqual([r.model_id for r in rows], ["session", "weekly_all", "weekly_scoped_opus"])
         self.assertEqual([r.percent_used for r in rows], [12.0, 34.0, 5.0])
         self.assertEqual(rows[0].resets_at, "2030-01-01T05:00:00.000000+00:00")
@@ -44,7 +44,7 @@ class ParseTests(unittest.TestCase):
 
     def test_older_titled_shape(self) -> None:
         rows = parse_payload(samples.CLAUDE_CODE_TITLED, instance("claude_code", "Claude"), now=NOW)
-        self.assertEqual([r.model_label for r in rows], ["Current session", "All models", "Opus only"])
+        self.assertEqual([r.model_label for r in rows], ["5-hour limit", "7-day limit", "Opus only"])
         self.assertEqual([r.model_id for r in rows], ["session", "weekly_all", "weekly_scoped_example"])
         self.assertEqual(rows[0].resets_at, "2030-01-01T05:00:00Z")
 
@@ -59,7 +59,7 @@ class ParseTests(unittest.TestCase):
         payload = copy.deepcopy(samples.CLAUDE_CODE)
         payload.pop("limits")
         rows = parse_payload(payload, instance("claude_code"), now=NOW)
-        self.assertEqual([r.model_label for r in rows], ["5-hour session", "7-day, all models"])
+        self.assertEqual([r.model_label for r in rows], ["5-hour limit", "7-day limit"])
         self.assertEqual([r.percent_used for r in rows], [12.0, 34.0])
 
     def test_odd_limit_entries_skipped(self) -> None:

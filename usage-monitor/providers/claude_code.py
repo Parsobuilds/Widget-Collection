@@ -43,7 +43,7 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 DEFAULT_CREDENTIALS = profile_text(".claude", ".credentials.json")
 
 # Fallback rows when the reply has no ``limits`` list: (key, label).
-_FALLBACK_WINDOWS = (("five_hour", "5-hour session"), ("seven_day", "7-day, all models"))
+_FALLBACK_WINDOWS = (("five_hour", "5-hour limit"), ("seven_day", "7-day limit"))
 
 
 def default_credentials_path() -> Path:
@@ -85,9 +85,11 @@ def _row_from_window(
     )
 
 
-# Labels for the ``kind`` of a ``limits`` entry (the names Claude's own usage
-# page shows). Unknown kinds get a label made from the kind itself.
-_KIND_LABELS = {"session": "Current session", "weekly_all": "All models"}
+# Labels for the shared ``limits`` entries, worded like the Codex rows
+# ("5-hour limit", "7-day limit"). These replace the titles Claude's reply
+# sends ("Current session", "All models"). Unknown kinds get a label made
+# from the kind itself.
+_KIND_LABELS = {"session": "5-hour limit", "weekly_all": "7-day limit"}
 
 # Per-model limits that are not shown (Fable is moving to API credits).
 _HIDDEN_TITLE_WORDS = ("fable",)
@@ -119,6 +121,11 @@ def _limit_name(item: dict[str, Any]) -> tuple[str, str]:
     title = str(item.get("title") or "").strip()
     kind = str(item.get("kind") or item.get("category") or "").strip()
     scope = _scope_name(item.get("scope"))
+    # The two shared windows always use our own wording, even when the reply
+    # names them, so Claude and Codex read the same.
+    known_label = _KIND_LABELS.get(kind) or _KIND_LABELS.get(str(item.get("id") or "").strip())
+    if known_label:
+        title = known_label
     if not title:
         if kind in _KIND_LABELS:
             title = _KIND_LABELS[kind]

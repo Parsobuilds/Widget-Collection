@@ -50,6 +50,10 @@ if TYPE_CHECKING:
 MODELS_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 CLOUD_CODE_PROJECT = "aicode-consumers"
+SUMMARY_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+# The quota summary only lists every group (Gemini, Argon, ...) when the caller
+# identifies itself as the Antigravity hub, the same way T3 Code does.
+HUB_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=windows; arch=amd64; cl=963137146)"
 _TRUSTED_TOKEN_HOSTS = frozenset({"oauth2.googleapis.com", "accounts.google.com", "www.googleapis.com"})
 
 # Short-lived access tokens, kept in memory only: {hash(refresh token): (token, expiry)}.
@@ -163,6 +167,84 @@ def fetch_models(access_token: str) -> Any:
     )
 
 
+def fetch_summary(access_token: str) -> Any:
+    """Call ``retrieveUserQuotaSummary``: the 5-hour and weekly limit of each model group."""
+    return http_json(
+        SUMMARY_URL,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "User-Agent": HUB_USER_AGENT,
+        },
+        body=json.dumps({"project": CLOUD_CODE_PROJECT}).encode("utf-8"),
+    )
+
+
+# Row ids for the main Gemini group's shared windows. The widget draws these
+# two as header bars, the same way it draws Claude's and Codex's windows.
+FIVE_HOUR_ID = "five_hour"
+SEVEN_DAY_ID = "seven_day"
+# Extra groups (for example Gemini 4 Argon's own weekly limit) get this prefix,
+# which also tells the widget to draw them as a full-width bar.
+WINDOW_PREFIX = "window:"
+
+
+def parse_summary(
+    payload: Any,
+    instance: "ProviderInstance",
+    now: datetime | None = None,
+) -> list[UsageRow]:
+    """Rows from the quota summary, or an empty list when it has no Gemini group.
+
+    * The "Gemini Models" group gives the "5-hour limit" and "7-day limit" rows.
+    * Any other Gemini group (such as "Gemini 4 Argon") gets one row per
+      window, named after the group, shown under the header bars.
+    * The "Claude and GPT models" group is left out: those models are used
+      through the Claude provider instead.
+    """
+    groups = payload.get("groups") if isinstance(payload, dict) else None
+    if not isinstance(groups, list):
+        return []
+    main_rows: list[UsageRow] = []
+    extra_rows: list[UsageRow] = []
+    for group in groups:
+        if not isinstance(group, dict) or not isinstance(group.get("buckets"), list):
+            continue
+        name = str(group.get("displayName") or "").strip()
+        buckets = [b for b in group["buckets"] if isinstance(b, dict) and b.get("bucketId")]
+        if not name.lower().startswith("gemini") or not buckets:
+            continue
+        is_main = name.lower() == "gemini models"
+        for bucket in sorted(buckets, key=lambda b: 0 if b.get("window") == "5h" else 1):
+            try:
+                # Zero is left out of the reply (protobuf JSON), so missing means used up.
+                remaining = float(bucket.get("remainingFraction", 0.0))
+            except (TypeError, ValueError):
+                continue
+            weekly = bucket.get("window") == "weekly"
+            resets_at = str(bucket["resetTime"]) if bucket.get("resetTime") else None
+            if is_main:
+                model_id = SEVEN_DAY_ID if weekly else FIVE_HOUR_ID
+                label = "7-day limit" if weekly else "5-hour limit"
+            else:
+                model_id = WINDOW_PREFIX + str(bucket["bucketId"])
+                short = name[len("Gemini "):] if name.startswith("Gemini ") else name
+                label = f"{short} {'7-day' if weekly else '5-hour'} limit"
+            row = make_row(
+                instance,
+                model_id=model_id,
+                model_label=label,
+                percent_used=clamp_percent((1.0 - remaining) * 100),
+                resets_at=resets_at,
+                reset_text=format_reset_countdown(resets_at, now=now) if resets_at else "",
+            )
+            (main_rows if is_main else extra_rows).append(row)
+    if not main_rows:
+        return []
+    return main_rows + extra_rows
+
+
 # Names that Antigravity does not list itself: they share the quota of the first
 # of these models that the reply does list (Gemini models draw on one pool).
 MODEL_ALIASES: dict[str, list[str]] = {
@@ -239,6 +321,7 @@ def parse_payload(
     return rows
 
 
+
 class AntigravityKind(ProviderKind):
     """Per-model quotas for the Antigravity sign-in used by T3 Code."""
 
@@ -258,14 +341,6 @@ class AntigravityKind(ProviderKind):
             default="",
             placeholder=profile_text(".t3", "userdata", "providers", "antigravity", "...", "acp_token.json"),
             help="Filled in by Detect. Leave empty to search the standard location.",
-        ),
-        FieldSpec(
-            key="models",
-            label="Models to show",
-            required=False,
-            default="",
-            placeholder="gemini-4-argon, gemini-4-hydrogen",
-            help="Comma-separated model names. Leave empty to show every model.",
         ),
     ]
     supports_detect = True
@@ -304,12 +379,25 @@ class AntigravityKind(ProviderKind):
 
     def fetch(self, instance: "ProviderInstance", secret: str | None) -> list[UsageRow]:
         details = read_token_file(self._path_for(instance))
-        access = get_access_token(details)
+        get_access_token(details)  # an expired sign-in stops here with a clear message
+
+        def call(fetcher):
+            try:
+                return fetcher(get_access_token(details))
+            except ProviderError as exc:
+                if exc.code != ProviderError.AUTH:
+                    raise
+                # The access token may have expired early: renew once and retry.
+                return fetcher(get_access_token(details, force=True))
+
+        # Preferred: the 5-hour + weekly summary T3 Code shows. If Google stops
+        # answering it, fall back to the older per-model quotas.
         try:
-            payload = fetch_models(access)
+            rows = parse_summary(call(fetch_summary), instance)
         except ProviderError as exc:
-            if exc.code != ProviderError.AUTH:
+            if exc.code == ProviderError.AUTH:
                 raise
-            # The access token may have expired early: renew once and retry.
-            payload = fetch_models(get_access_token(details, force=True))
-        return parse_payload(payload, instance)
+            rows = []
+        if rows:
+            return rows
+        return parse_payload(call(fetch_models), instance)

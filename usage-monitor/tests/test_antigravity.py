@@ -14,7 +14,7 @@ import samples  # noqa: E402
 from fakes import FakeHttp, KeyringMixin, TempProfile, http_error, instance  # noqa: E402
 
 from providers import antigravity, registry  # noqa: E402
-from providers.antigravity import AntigravityKind, parse_payload, read_token_file  # noqa: E402
+from providers.antigravity import AntigravityKind, parse_payload, parse_summary, read_token_file  # noqa: E402
 from providers.base import ProviderError, profile_text  # noqa: E402
 
 TOKEN_FILE = {
@@ -27,6 +27,41 @@ TOKEN_FILE = {
 }
 TOKEN_PATH = ".t3/userdata/providers/antigravity/fakeid01/antigravity-acp/acp_token.json"
 NOW = datetime(2030, 1, 1, 3, 0, tzinfo=timezone.utc)
+
+# Shape of a real retrieveUserQuotaSummary reply (values made up).
+SUMMARY = {"groups": [
+    {"displayName": "Gemini Models", "buckets": [
+        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.9,
+         "resetTime": "2030-01-07T03:00:00Z"},
+        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.75,
+         "resetTime": "2030-01-01T04:00:00Z"},
+    ]},
+    {"displayName": "Claude and GPT models", "buckets": [
+        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1},
+    ]},
+    {"displayName": "Gemini 4 Argon", "buckets": [
+        {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly",
+         "resetTime": "2030-01-06T03:00:00Z"},
+    ]},
+]}
+
+
+class SummaryTests(unittest.TestCase):
+    def test_gemini_windows_then_argon(self) -> None:
+        rows = parse_summary(SUMMARY, instance("antigravity"), now=NOW)
+        self.assertEqual([r.model_id for r in rows],
+                         ["five_hour", "seven_day", "window:gemini-argon-wtu-weekly"])
+        self.assertEqual([r.model_label for r in rows],
+                         ["5-hour limit", "7-day limit", "4 Argon 7-day limit"])
+        # Missing remainingFraction means the quota is used up.
+        self.assertEqual([round(r.percent_used) for r in rows], [25, 10, 100])
+        self.assertEqual(rows[0].reset_text, "resets in 1h 00m")
+
+    def test_no_gemini_group_gives_nothing(self) -> None:
+        payload = {"groups": [SUMMARY["groups"][1]]}
+        self.assertEqual(parse_summary(payload, instance("antigravity")), [])
+        self.assertEqual(parse_summary({}, instance("antigravity")), [])
+        self.assertEqual(parse_summary(None, instance("antigravity")), [])
 
 
 class ParseTests(unittest.TestCase):
@@ -104,32 +139,41 @@ class TokenFileTests(KeyringMixin, unittest.TestCase):
 
     def test_fetch_refreshes_then_reads_models(self) -> None:
         token_reply = {"access_token": "fake-access-0000", "expires_in": 3600}
-        with TempProfile() as profile, FakeHttp(token_reply, samples.ANTIGRAVITY) as http:
+        with TempProfile() as profile, FakeHttp(token_reply, SUMMARY) as http:
             profile.write_json(TOKEN_PATH, TOKEN_FILE)
             rows = registry.fetch_instance(instance("antigravity", "AG"))
-        self.assertEqual(len(rows), 3)
+        self.assertEqual([r.model_id for r in rows],
+                         ["five_hour", "seven_day", "window:gemini-argon-wtu-weekly"])
         self.assertEqual(http.requests[0].full_url, "https://oauth2.googleapis.com/token")
         form = urllib.parse.parse_qs(http.requests[0].data.decode())
         self.assertEqual(form["client_id"], ["fake-client-id.example"])
         self.assertEqual(form["grant_type"], ["refresh_token"])
         self.assertEqual(http.header(1, "Authorization"), "Bearer fake-access-0000")
-        self.assertIn("fetchAvailableModels", http.requests[1].full_url)
+        self.assertIn("retrieveUserQuotaSummary", http.requests[1].full_url)
+        self.assertIn("antigravity/hub", http.header(1, "User-Agent"))
+
+    def test_falls_back_to_models_without_summary(self) -> None:
+        token_reply = {"access_token": "fake-access-0000", "expires_in": 3600}
+        with TempProfile() as profile, FakeHttp(token_reply, {"groups": []}, samples.ANTIGRAVITY) as http:
+            profile.write_json(TOKEN_PATH, TOKEN_FILE)
+            rows = registry.fetch_instance(instance("antigravity", "AG"))
+        self.assertEqual(len(rows), 3)
+        self.assertIn("fetchAvailableModels", http.requests[2].full_url)
 
     def test_access_token_is_reused(self) -> None:
         token_reply = {"access_token": "fake-access-0000", "expires_in": 3600}
-        with TempProfile() as profile, FakeHttp(token_reply, samples.ANTIGRAVITY, samples.ANTIGRAVITY) as http:
+        with TempProfile() as profile, FakeHttp(token_reply, SUMMARY, SUMMARY) as http:
             profile.write_json(TOKEN_PATH, TOKEN_FILE)
             registry.fetch_instance(instance("antigravity"))
             registry.fetch_instance(instance("antigravity"))
         self.assertEqual(len(http.requests), 3)
 
     def test_401_renews_once_and_retries(self) -> None:
-        models_url = antigravity.MODELS_URL
         replies = (
             {"access_token": "fake-old", "expires_in": 3600},
-            http_error(models_url, 401),
+            http_error(antigravity.SUMMARY_URL, 401),
             {"access_token": "fake-new", "expires_in": 3600},
-            samples.ANTIGRAVITY,
+            SUMMARY,
         )
         with TempProfile() as profile, FakeHttp(*replies) as http:
             profile.write_json(TOKEN_PATH, TOKEN_FILE)

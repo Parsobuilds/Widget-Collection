@@ -77,6 +77,7 @@ if str(HERE) not in sys.path:
 import provider_config
 import secrets_store
 from cache import UsageCache
+from providers._t3models import models_for as t3_models_for
 from models import (
     CreditRow,
     UsageRow,
@@ -904,6 +905,32 @@ class UsageMonitorWidget(QtWidgets.QWidget):
         save_config(self.config)
         self.update()
 
+    def show_models_menu(self, instance_id: str) -> None:
+        """Drop down the models this provider offers, as T3 Code's picker lists them.
+
+        Clicking a model copies its id (handy when setting up other tools).
+        Showing or hiding the card's rows stays in Settings.
+        """
+        inst = next((i for i in provider_config.list_instances(provider_config.load_config())
+                     if i.instance_id == instance_id), None)
+        if inst is None:
+            return
+        models = t3_models_for(inst)
+        menu = QtWidgets.QMenu(self)
+        title = menu.addAction(f"{inst.label}: models available")
+        title.setEnabled(False)
+        menu.addSeparator()
+        for slug, name in models:
+            action = menu.addAction(name)
+            action.setToolTip(f"{slug} (click to copy)")
+            action.triggered.connect(
+                lambda _checked=False, text=slug: QtWidgets.QApplication.clipboard().setText(text))
+        if not models:
+            menu.addAction("No model list for this provider").setEnabled(False)
+        menu.setToolTipsVisible(True)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+        menu.popup(QtGui.QCursor.pos())
+
     def move_favourite(self, star_key: str, delta: int) -> None:
         """Move a starred row up (-1) or down (+1) in the user's own order."""
         favs = list(self.config.get("favourites") or [])
@@ -1230,6 +1257,8 @@ class UsageMonitorWidget(QtWidgets.QWidget):
             self.update()
         elif name.startswith("star:"):
             self.toggle_star(name[5:])
+        elif name.startswith("models:"):
+            self.show_models_menu(name[7:])
         elif name.startswith("up:"):
             self.move_favourite(name[3:], -1)
         elif name.startswith("down:"):
@@ -1742,35 +1771,61 @@ class UsageMonitorWidget(QtWidgets.QWidget):
     ) -> None:
         """Draw shared provider windows once."""
         left, right = float(self._left()), float(self._right())
-        labels = [summary.primary_label, summary.secondary_label]
-        countdown = format_reset_countdown(summary.resets_at) or summary.reset_text
-        if countdown:
-            labels.append(countdown.replace("resets in ", "↻ "))
-        reading = " · ".join(label for label in labels if label)
-        if not reading and summary.status != "ok":
-            reading = summary.status.replace("_", " ")
-        name_width = self._text(
-            painter, left, y + 11, summary.provider_label,
-            qt_font(8, True), C_LABEL,
-            max_width=(right - left) * (0.42 if reading else 1),
-        )
-        self._text(
-            painter, right, y + 11, reading, qt_font(7),
-            C_AMBER if summary.status != "ok" else C_TEXT2,
-            align_right=True, max_width=right - left - name_width - 6,
-        )
-        bars = [(value, name) for value, name in (
-            (summary.primary_percent, summary.primary_name),
-            (summary.secondary_percent, summary.secondary_name),
+
+        def countdown(resets_at: str | None, text: str) -> str:
+            """Short "↻ 3h 44m" form of a window's reset time."""
+            return (format_reset_countdown(resets_at) or text).replace("resets in ", "↻ ")
+
+        bars = [(value, name, window_id, countdown(resets_at, text))
+                for value, name, window_id, resets_at, text in (
+            (summary.primary_percent, summary.primary_name, summary.primary_id,
+             summary.resets_at, summary.reset_text),
+            (summary.secondary_percent, summary.secondary_name, summary.secondary_id,
+             summary.secondary_resets_at, summary.secondary_reset_text),
         ) if value is not None]
+        width = (right - left - 6 * (len(bars) - 1)) / len(bars) if bars else right - left
+        reading_color = C_AMBER if summary.status != "ok" else C_TEXT2
         if bars:
-            width = (right - left - 6 * (len(bars) - 1)) / len(bars)
-            for index, (value, name) in enumerate(bars):
+            # Each bar's own reading ("4% ↻ 3h 44m") sits just above its right end.
+            readings = [" ".join(part for part in (f"{value:.0f}%", reset) if part)
+                        for value, _name, _id, reset in bars]
+            first_w = QtGui.QFontMetrics(qt_font(7)).horizontalAdvance(readings[0])
+            name_width = self._text(painter, left, y + 11, summary.provider_label, qt_font(8, True),
+                                    C_LABEL, max_width=max(20.0, width - first_w - 12))
+            for index, reading in enumerate(readings):
+                bar_x = left + index * (width + 6)
+                self._text(painter, bar_x + width, y + 11, reading, qt_font(7), reading_color,
+                           align_right=True, max_width=width if index else width * 0.6)
+        else:
+            reading = summary.status.replace("_", " ") if summary.status != "ok" else ""
+            name_width = self._text(
+                painter, left, y + 11, summary.provider_label, qt_font(8, True), C_LABEL,
+                max_width=(right - left) * (0.42 if reading else 1),
+            )
+            self._text(painter, right, y + 11, reading, qt_font(7), reading_color,
+                       align_right=True, max_width=right - left - name_width - 6)
+        # Clicking the provider's name lists the models it offers.
+        self._text(painter, left + name_width + 3, y + 11, "▾", qt_font(7, True), C_TEXT2)
+        self._zones.append((QRectF(left, y, name_width + 14, 14), f"models:{summary.provider_id}"))
+        if bars:
+            for index, (value, name, window_id, _reset) in enumerate(bars):
                 bar_x = left + index * (width + 6)
                 self._draw_bar(painter, bar_x, y + 15, width, value)
+                # Each shared window (e.g. Claude's 5-hour limit) can be starred,
+                # using the same "provider:model" key as an ordinary row.
+                star_w = 0.0
+                if window_id:
+                    star_key = f"{summary.provider_id}:{window_id}"
+                    starred = star_key in (self.config.get("favourites") or [])
+                    self._text(painter, bar_x + width, y + 28, "★" if starred else "☆",
+                               qt_font(9, True), C_AMBER if starred else C_LABEL,
+                               align_right=True)
+                    star_w = 14.0
+                    self._zones.append((QRectF(bar_x + width - 15, y + 17, 17, 15),
+                                        f"star:{star_key}"))
                 # The window's name sits right under its own bar.
                 self._text(painter, bar_x, y + 28, name, qt_font(8, True), C_VALUE,
-                           max_width=width)
+                           max_width=width - star_w)
         if summary.detail and (
             summary.status != "ok"
         ):

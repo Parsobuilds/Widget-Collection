@@ -272,11 +272,41 @@ class ProviderSummary:
     reset_text: str = ""
     status: str = "ok"
     detail: str = ""
+    # Reset time of the secondary (7-day) window; resets_at above is the primary's.
+    secondary_resets_at: str | None = None
+    secondary_reset_text: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Return the additive provider JSON contract."""
         return asdict(self)
 
+
+
+# Instance setting that lists the row ids the user unticked in Settings.
+HIDDEN_ROWS_KEY = "hidden_rows"
+
+
+def hidden_row_ids(settings: dict[str, Any] | None) -> list[str]:
+    """Row ids the user chose to hide, in the order they were saved."""
+    text = str((settings or {}).get(HIDDEN_ROWS_KEY) or "")
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+# Row ids drawn as the two header bars. Any provider that reports a row with
+# id "five_hour" or "seven_day" gets them; a few older providers use other ids.
+DEFAULT_HEADER_IDS = ({"five_hour"}, {"seven_day"})
+HEADER_IDS_BY_KIND = {
+    "claude_code": ({"session", "five_hour"}, {"weekly_all", "seven_day"}),
+    "codex": ({"primary"}, {"secondary"}),
+}
+# Rows whose id starts with this get their own full-width bar under the header
+# (for example Antigravity's "4 Argon 7-day limit").
+WINDOW_PREFIX = "window:"
+
+
+def header_window_ids(provider_kind: str) -> tuple[set[str], set[str]]:
+    """(5-hour ids, 7-day ids) that ``provider_kind`` uses for its header bars."""
+    return HEADER_IDS_BY_KIND.get(provider_kind, DEFAULT_HEADER_IDS)
 
 
 def build_provider_summaries(rows: list[UsageRow]) -> list[ProviderSummary]:
@@ -290,13 +320,9 @@ def build_provider_summaries(rows: list[UsageRow]) -> list[ProviderSummary]:
         status = next((state for state in ("error", "stale", "no_data")
                        if any(row.status == state for row in group)), "ok")
         summary = ProviderSummary(provider_id, first.provider_label, status=status)
-        primary = secondary = None
-        if first.provider_kind == "claude_code":
-            primary = next((r for r in group if r.model_id in {"session", "five_hour"}), None)
-            secondary = next((r for r in group if r.model_id in {"weekly_all", "seven_day"}), None)
-        elif first.provider_kind == "codex":
-            primary = next((r for r in group if r.model_id == "primary"), None)
-            secondary = next((r for r in group if r.model_id == "secondary"), None)
+        primary_ids, secondary_ids = header_window_ids(first.provider_kind)
+        primary = next((r for r in group if r.model_id in primary_ids), None)
+        secondary = next((r for r in group if r.model_id in secondary_ids), None)
         if primary:
             summary.primary_percent = primary.percent_used
             summary.primary_name, summary.primary_id = primary.model_label, primary.model_id
@@ -306,6 +332,8 @@ def build_provider_summaries(rows: list[UsageRow]) -> list[ProviderSummary]:
             summary.secondary_percent = secondary.percent_used
             summary.secondary_name, summary.secondary_id = secondary.model_label, secondary.model_id
             summary.secondary_label = f"7d {secondary.percent_used:.0f}%" if secondary.percent_used is not None else ""
+            summary.secondary_resets_at = secondary.resets_at
+            summary.secondary_reset_text = secondary.reset_text
         if status != "ok":
             summary.detail = " · ".join(dict.fromkeys(r.reason for r in group if r.reason and r.status != "ok"))
         summaries.append(summary)
@@ -314,9 +342,8 @@ def build_provider_summaries(rows: list[UsageRow]) -> list[ProviderSummary]:
 
 def model_display_row(row: UsageRow, summary: ProviderSummary) -> UsageRow:
     """Keep scoped weekly/code-review limits; shared windows already have header bars."""
-    shared_ids = {"claude_code": {"session", "five_hour", "weekly_all", "seven_day"},
-                  "codex": {"primary", "secondary"}}
-    if row.model_id in shared_ids.get(row.provider_kind, set()) and row.status == "ok":
+    primary_ids, secondary_ids = header_window_ids(row.provider_kind)
+    if row.model_id in primary_ids | secondary_ids and row.status == "ok":
         return replace(row, percent_used=None, secondary_percent=None, secondary_label="",
                        resets_at=None, reset_text="", reason="")
     return replace(row)
@@ -332,6 +359,9 @@ def is_header_window_row(row: UsageRow, summary: ProviderSummary) -> bool:
 
 
 def uses_inline_metrics(row: UsageRow) -> bool:
+    # Extra windows (e.g. Antigravity's Argon weekly limit) get a full-width bar.
+    if row.model_id.startswith(WINDOW_PREFIX):
+        return False
     return row.provider_kind in {"antigravity", "google_ai_studio_t3"}
 
 
