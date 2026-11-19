@@ -357,7 +357,7 @@ def main() -> int:
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--linux", action="store_true",
                         help="build the Linux tarball (run this on Linux)")
-    parser.add_argument("--version", default=os.environ.get("DESKTOP_WIDGETS_VERSION", "1.0.1"))
+    parser.add_argument("--version", default=os.environ.get("DESKTOP_WIDGETS_VERSION", "1.0.2"))
     args = parser.parse_args()
     version = normalize_version(args.version)
     if args.linux:

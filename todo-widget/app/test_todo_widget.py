@@ -337,7 +337,10 @@ class LinuxBehaviourTests(unittest.TestCase):
         self.assertEqual(widget.lbl_stats.text().split()[0], "0")  # empty first run
 
     def test_snapping_is_a_quiet_no_op(self) -> None:
-        self.assertFalse(snap_widgets.snap_widget_to_edge())
+        # IS_WINDOWS is read when the module loads, so patching sys.platform is not
+        # enough: without this, a Windows test run snaps the real cards on screen.
+        with mock.patch.object(snap_widgets, "IS_WINDOWS", False):
+            self.assertFalse(snap_widgets.snap_widget_to_edge())
 
 
 class SharedBackgroundTests(unittest.TestCase):

@@ -16,7 +16,7 @@ Three frosted-glass widgets bring your tasks, AI usage and computer stats to you
 
 ## Download and install
 
-1. Download **DesktopWidgets-Setup-1.0.1.exe** from the project's releases and run it.
+1. Download **DesktopWidgets-Setup-1.0.2.exe** from the project's releases and run it.
 2. If Windows SmartScreen shows **Windows protected your PC** and **Unknown publisher**, the installer is unsigned, so Windows cannot verify its publisher. If you trust the download, click **More info**, then **Run anyway**.
 3. Tick any combination of **To-Do Widget**, **Usage Monitor** and **Desktop Monitor**. Under Desktop Monitor, you can also choose **CPU temperature sensor**.
 4. Follow the remaining prompts and start your chosen widgets.
@@ -26,7 +26,7 @@ The normal installation does not need administrator rights. If you select **CPU 
 For an unattended installation, for example:
 
 ```text
-DesktopWidgets-Setup-1.0.1.exe /VERYSILENT /COMPONENTS="todo,usage,monitor"
+DesktopWidgets-Setup-1.0.2.exe /VERYSILENT /COMPONENTS="todo,usage,monitor"
 ```
 
 ## Linux
@@ -35,12 +35,12 @@ Desktop Widgets runs on 64-bit (x86_64) Linux with glibc and a desktop session. 
 
 ### Install
 
-1. Download **DesktopWidgets-1.0.0-linux-x86_64.tar.gz** from the project's releases.
+1. Download **DesktopWidgets-1.0.2-linux-x86_64.tar.gz** from the project's releases.
 2. Extract it and open the new folder:
 
    ```text
-   tar -xzf DesktopWidgets-1.0.0-linux-x86_64.tar.gz
-   cd DesktopWidgets-1.0.0-linux-x86_64
+   tar -xzf DesktopWidgets-1.0.2-linux-x86_64.tar.gz
+   cd DesktopWidgets-1.0.2-linux-x86_64
    ```
 
 3. Run the installer as your own user. Do not use `sudo`: the installer refuses to run as root and installs only for you.
@@ -159,7 +159,7 @@ Developers need 64-bit Python 3.12 or newer and Inno Setup 6. From the project f
 python build.py
 ```
 
-The build creates `.build-venv`, runs the unit tests, downloads and verifies the LibreHardwareMonitor DLLs, freezes the applications with PyInstaller, and compiles `dist\DesktopWidgets-Setup-1.0.0.exe`.
+The build creates `.build-venv`, runs the unit tests, downloads and verifies the LibreHardwareMonitor DLLs, freezes the applications with PyInstaller, and compiles `dist\DesktopWidgets-Setup-1.0.2.exe`.
 
 To build the Linux package, run this on a Linux machine with Python 3.12 (or `uv`) from the project folder:
 
@@ -167,7 +167,7 @@ To build the Linux package, run this on a Linux machine with Python 3.12 (or `uv
 python3.12 build.py --linux
 ```
 
-It creates `.build-venv-linux`, runs the unit tests with the offscreen Qt platform, freezes the three widgets with PyInstaller, and writes `dist/DesktopWidgets-1.0.0-linux-x86_64.tar.gz`.
+It creates `.build-venv-linux`, runs the unit tests with the offscreen Qt platform, freezes the three widgets with PyInstaller, and writes `dist/DesktopWidgets-1.0.2-linux-x86_64.tar.gz`.
 
 The build machine needs the X11 libraries that Qt's X11 support loads, so that they are copied into the package. The build stops with a message if they are missing. On Ubuntu:
 
